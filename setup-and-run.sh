@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # ── Configuration ───────────────────────────────────────────────────
-INSTALL_DIR="/home/theia"
+# Everything is built relative to wherever you run this script from.
+BASE_DIR="$(pwd)"
 PORT="${PORT:-3000}"
 NODE_MAJOR=22
 
@@ -33,14 +34,11 @@ echo "    Node $(node -v)  npm $(npm -v)"
 echo "==> Enabling corepack..."
 sudo corepack enable
 
-# ── Workspace directory ─────────────────────────────────────────────
-echo "==> Setting up workspace at ${INSTALL_DIR}..."
-sudo mkdir -p "${INSTALL_DIR}"
-sudo chown "$(whoami)" "${INSTALL_DIR}"
+# ── Workspace temp directory ────────────────────────────────────────
 mkdir -p /tmp/theia/workspaces/tmp
 
 # ── Clone repositories ──────────────────────────────────────────────
-cd "${INSTALL_DIR}"
+cd "${BASE_DIR}"
 
 for repo in rsl_vscode_extension asl_vscode_extension pub; do
     if [ -d "${repo}" ]; then
@@ -54,41 +52,41 @@ done
 
 # ── Build RSL extension ────────────────────────────────────────────
 echo "==> Building RSL extension..."
-cd "${INSTALL_DIR}/rsl_vscode_extension"
+cd "${BASE_DIR}/rsl_vscode_extension"
 yarn install
 npx vsce package --allow-missing-repository
 
-mkdir -p "${INSTALL_DIR}/pub/plugins/rsl-vscode-extension"
-unzip -o *.vsix -d "${INSTALL_DIR}/pub/plugins/rsl-vscode-extension"
+mkdir -p "${BASE_DIR}/pub/plugins/rsl-vscode-extension"
+unzip -o *.vsix -d "${BASE_DIR}/pub/plugins/rsl-vscode-extension"
 
 # ── Build ASL extension ────────────────────────────────────────────
 echo "==> Building ASL extension..."
-cd "${INSTALL_DIR}/asl_vscode_extension"
+cd "${BASE_DIR}/asl_vscode_extension"
 yarn install
 npx vsce package --allow-missing-repository
 
-mkdir -p "${INSTALL_DIR}/pub/plugins/asl-vscode-extension"
-unzip -o *.vsix -d "${INSTALL_DIR}/pub/plugins/asl-vscode-extension"
+mkdir -p "${BASE_DIR}/pub/plugins/asl-vscode-extension"
+unzip -o *.vsix -d "${BASE_DIR}/pub/plugins/asl-vscode-extension"
 
 # ── Clean up extension source ──────────────────────────────────────
 echo "==> Cleaning up extension source dirs..."
-rm -rf "${INSTALL_DIR}/rsl_vscode_extension" "${INSTALL_DIR}/asl_vscode_extension"
+rm -rf "${BASE_DIR}/rsl_vscode_extension" "${BASE_DIR}/asl_vscode_extension"
 
 # ── Build Theia IDE ─────────────────────────────────────────────────
 echo "==> Installing Theia dependencies (ignore-scripts to avoid race)..."
-cd "${INSTALL_DIR}/pub"
+cd "${BASE_DIR}/pub"
 yarn install --ignore-scripts
 
 echo "==> Building itlingo-itoi extension..."
-cd "${INSTALL_DIR}/pub/itlingo-itoi"
+cd "${BASE_DIR}/pub/itlingo-itoi"
 yarn build
-cd "${INSTALL_DIR}/pub"
 
 echo "==> Rebuilding native modules..."
+cd "${BASE_DIR}/pub"
 npm rebuild
 
 echo "==> Building Theia browser app (this takes a while)..."
-cd "${INSTALL_DIR}/pub/browser-app"
+cd "${BASE_DIR}/pub/browser-app"
 yarn theia build
 
 echo ""
