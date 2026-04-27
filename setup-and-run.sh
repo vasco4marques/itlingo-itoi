@@ -80,7 +80,9 @@ cd "${INSTALL_DIR}/pub"
 yarn install --ignore-scripts
 
 echo "==> Building itlingo-itoi extension..."
-yarn workspace itlingo-itoi run build
+cd "${INSTALL_DIR}/pub/itlingo-itoi"
+yarn build
+cd "${INSTALL_DIR}/pub"
 
 echo "==> Rebuilding native modules..."
 npm rebuild
