@@ -29,10 +29,9 @@ fi
 
 echo "    Node $(node -v)  npm $(npm -v)"
 
-# ── Yarn + vsce ─────────────────────────────────────────────────────
-echo "==> Enabling corepack and installing vsce..."
+# ── Yarn ────────────────────────────────────────────────────────────
+echo "==> Enabling corepack..."
 sudo corepack enable
-npm install -g @vscode/vsce
 
 # ── Workspace directory ─────────────────────────────────────────────
 echo "==> Setting up workspace at ${INSTALL_DIR}..."
@@ -57,7 +56,7 @@ done
 echo "==> Building RSL extension..."
 cd "${INSTALL_DIR}/rsl_vscode_extension"
 yarn install
-vsce package --allow-missing-repository
+npx vsce package --allow-missing-repository
 
 mkdir -p "${INSTALL_DIR}/pub/plugins/rsl-vscode-extension"
 unzip -o *.vsix -d "${INSTALL_DIR}/pub/plugins/rsl-vscode-extension"
@@ -66,7 +65,7 @@ unzip -o *.vsix -d "${INSTALL_DIR}/pub/plugins/rsl-vscode-extension"
 echo "==> Building ASL extension..."
 cd "${INSTALL_DIR}/asl_vscode_extension"
 yarn install
-vsce package --allow-missing-repository
+npx vsce package --allow-missing-repository
 
 mkdir -p "${INSTALL_DIR}/pub/plugins/asl-vscode-extension"
 unzip -o *.vsix -d "${INSTALL_DIR}/pub/plugins/asl-vscode-extension"
