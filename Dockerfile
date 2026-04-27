@@ -48,7 +48,7 @@ RUN yarn install --ignore-scripts \
  && yarn workspace itlingo-itoi run build \
  && npm rebuild
 WORKDIR /home/theia/pub/browser-app
-RUN NODE_OPTIONS="--max_old_space_size=8192" yarn theia build
+RUN yarn theia build
 
 # ── Runtime configuration ────────────────────────────────────────────
 ENV PORT=3000
