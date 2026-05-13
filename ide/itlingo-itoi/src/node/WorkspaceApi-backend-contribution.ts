@@ -83,10 +83,11 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
         pgPool.on('remove', () => dbLog.debug("pg client removed"));
         pgPool.on('error', (err) => dbLog.error("pg pool error", { err: err.message, stack: err.stack }));
 
-        function fetchParamsFromEvent(event: nsfw.FileChangeEvent){
-            let splitPaths = event.directory.split(path.sep);
-            let params = workspaces.get(splitPaths[6]) as string[];
-            return params;
+        function fetchParamsFromEvent(event: nsfw.FileChangeEvent): string[] | undefined {
+            const splitPaths = event.directory.split(path.sep);
+            const candidate = splitPaths[6];
+            if (!candidate) return undefined;
+            return workspaces.get(candidate);
         }
         
         async function pullFilesFromDb(destinationFolder: string, params: string[]) {
@@ -145,7 +146,11 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
 
 
         async function addFileToDB( event:nsfw.CreatedFileEvent){
-            let params = fetchParamsFromEvent(event);
+            const params = fetchParamsFromEvent(event);
+            if (!params) {
+                watcherLog.trace("ignoring create event outside any workspace", { directory: event.directory, file: event.file });
+                return;
+            }
             const workspace = params[0];
             const fullfilepath = event.directory + '/' + event.file;
             const removeNameLength = staticFolderLength + workspace.length + 1;
@@ -174,7 +179,11 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
 
 
        async function changeFileToDB( event: nsfw.ModifiedFileEvent) {
-            let params = fetchParamsFromEvent(event);
+            const params = fetchParamsFromEvent(event);
+            if (!params) {
+                watcherLog.trace("ignoring modify event outside any workspace", { directory: event.directory, file: event.file });
+                return;
+            }
             const workspace = params[0];
             const client = await pgPool.connect();
             const fullfilepath = event.directory + '/' + event.file;
@@ -201,7 +210,11 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
         }
 
         function deleteFileToDB( event: nsfw.DeletedFileEvent) {
-            let params = fetchParamsFromEvent(event);
+            const params = fetchParamsFromEvent(event);
+            if (!params) {
+                watcherLog.trace("ignoring delete event outside any workspace", { directory: event.directory, file: event.file });
+                return;
+            }
             const workspace = params[0];
             const fullfilepath = event.directory + '/' + event.file;
             const removeNameLength = staticFolderLength + workspace.length + 1;
@@ -218,7 +231,11 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
         }
 
         function renameFileToDB( event: nsfw.RenamedFileEvent) {
-            let params = fetchParamsFromEvent(event);
+            const params = fetchParamsFromEvent(event);
+            if (!params) {
+                watcherLog.trace("ignoring rename event outside any workspace", { directory: event.directory, file: event.oldFile });
+                return;
+            }
             const workspace = params[0];
             const fullfilepath = event.directory + '/' + event.oldFile;
             const newfullfilepath = event.newDirectory + '/' + event.newFile;
