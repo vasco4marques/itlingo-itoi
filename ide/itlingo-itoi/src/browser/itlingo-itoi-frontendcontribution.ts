@@ -13,10 +13,12 @@ import { ApplicationShell } from '@theia/core/lib/browser/shell/application-shel
 import  TheiaURI from '@theia/core/lib/common/uri';
 
 import axios from 'axios';
-import { ItoiServer } from '../node/ItoiServer';
+import { ItoiServer } from '../common/itoi-protocol';
+import { createLogger } from './logger';
 // import { SharedStringServer } from '../node/SharedStringServer';
 
-
+const workspaceLog = createLogger('workspace');
+const itoiClientLog = createLogger('itoi-client');
 
 var path = '/home/theia/Workspaces';
 //var itlingoCloudURL = "https://itlingocloud.herokuapp.com/";
@@ -59,6 +61,7 @@ export class TheiaSendBdFileUpdates extends AbstractViewContribution<GettingStar
     //private tokens:{iv: string, t: string};
 
     protected async switchWorkspace(path: string): Promise<void> {
+        workspaceLog.info("switching workspace", { path });
         this.messageService.info(path);
          this.workspaceService.open(new TheiaURI(path), {
             preserveWindow: true
@@ -157,32 +160,41 @@ export class TheiaSendBdFileUpdates extends AbstractViewContribution<GettingStar
         
     }
     onStart(app: FrontendApplication):void {
+         workspaceLog.info("requesting workspace info");
          axios.get<JSON>('/getWorkspace',{ withCredentials: true, headers: {
             'Cache-Control': 'no-cache',
             'Pragma': 'no-cache',
             'Expires': '0',
           }, },).then(
                  (response: any) => {
-                     var prevRoot = this.workspaceService.tryGetRoots()[0] ;
-                     
+                    workspaceLog.info("getWorkspace response", {
+                        status: response.status,
+                        foldername: response.data.foldername,
+                        readonly: response.data.readonly,
+                        username: response.data.username,
+                    });
+                    var prevRoot = this.workspaceService.tryGetRoots()[0] ;
+
                     if (prevRoot != undefined) {
                         if (!this.compareFoldernames(response.data.foldername.toString(), prevRoot.resource.path.toString())){
                             path = '' + response.data.foldername;
+                            workspaceLog.info("changing workspace", { from: prevRoot.resource.path.toString(), to: response.data.foldername });
                             this.messageService.info("Changing Workspace to:" + response.data.foldername + " PREV:" + prevRoot.resource.path);
                             this.switchWorkspace(path);
+                        } else {
+                            workspaceLog.debug("keeping current workspace", { foldername: prevRoot.resource.path.toString() });
                         }
                     } else {
                         path = '' + response.data.foldername;
+                        workspaceLog.info("setting workspace", { to: response.data.foldername, status: response.status });
                         this.messageService.info("Setting Workspace to:" + response.data.foldername + " STATUS:" + response.status);
                         this.switchWorkspace(path);
                     }
                     this.stateService.reachedState('ready').then(
                         () => this.openView({ reveal: true })
                     );
-                    //console.log("SetREADONLY");
                     this.readonly = response.data.readonly;
-                    //this.tokens = response.data.tokens;
-                    console.log(this.readonly);
+                    workspaceLog.debug("readonly flag", { readonly: this.readonly });
                     this.setReadOnly();
                     this.itoiServer.setUsername(response.data.username);
                     // setInterval(
@@ -192,21 +204,24 @@ export class TheiaSendBdFileUpdates extends AbstractViewContribution<GettingStar
                     // ,10*1000);
                     this.monacoWorkspace.onDidOpenTextDocument(async (e)=> {
                         let usersList = await this.itoiServer.getUsersWithFileOpen(e.uri);
+                        itoiClientLog.debug("document opened", { uri: e.uri, otherUsers: usersList });
                         if(e.uri.substring(0,4) === 'file' && usersList.length>0){
                             this.messageService.info("This document is currently open by the following users!\n" + usersList.join(' | '));
-                            
+
                         }
                         this.itoiServer.fileOpened(e.uri);
                     });
                     this.monacoWorkspace.onDidCloseTextDocument((e)=> {
+                        itoiClientLog.debug("document closed", { uri: e.uri });
                         this.itoiServer.fileClosed(e.uri);
                     });
                  }
              ).catch((error) => {
+                workspaceLog.error("getWorkspace request failed", { err: error?.message, status: error?.response?.status });
                 //window.location.href = itlingoCloudURL;
              });
         this.messageService.info("Welcome to ITLingo online IDE!");
-        
+
     }
 }
 

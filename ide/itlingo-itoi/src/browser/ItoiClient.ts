@@ -1,13 +1,15 @@
 import {  injectable } from "@theia/core/shared/inversify";
-import { ItoiClient } from "../node/ItoiServer";
+import { ItoiClient } from "../common/itoi-protocol";
+import { createLogger } from "./logger";
 // import { MessageService } from "@theia/core";
 
+const log = createLogger('itoi-client');
 
 @injectable()
 export class ItoiClientNode implements ItoiClient {
-    
+
     onMessageUser(message: string): void {
-        console.log(message);
+        log.info("message from server", { message });
     }
 
 

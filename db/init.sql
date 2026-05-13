@@ -6,7 +6,7 @@ begin
 
     CREATE TABLE t_workspaces
     (
-        id uuid COLLATE pg_catalog."default" NOT NULL DEFAULT 'gen_random_uuid()',
+        id uuid NOT NULL DEFAULT gen_random_uuid(),
         workspace varchar NOT NULL UNIQUE,
         CONSTRAINT t_workspaces_pkey PRIMARY KEY (id)
     );
@@ -77,12 +77,7 @@ return QUERY SELECT t_files.filename, t_files.file FROM t_files WHERE workspace_
 end; 
 $$;
 
-
-select sp_pullfiles('DemoWorkspace');
-
-
 --INSERT INTO t_files (filename, workspace, file) VALUES ($1, $2, $3)
-
 
 CREATE PROCEDURE sp_insertFiles(arg_filename varchar, arg_workspace varchar, arg_file bytea) 
 language plpgsql
@@ -184,7 +179,7 @@ SELECT t_workspaces.id into var_workspace_id FROM t_workspaces
 
 
 INSERT INTO t_workspaces_git (workspace_id, giturl) VALUES (var_workspace_id, arg_repo) 
-    ON CONFLICT(workspace_id) UPDATE SET giturl = arg_repo;
+    ON CONFLICT(workspace_id) DO UPDATE SET giturl = arg_repo;
 
 end; 
 $$;
@@ -218,14 +213,13 @@ CREATE OR REPLACE FUNCTION fn_getGitRepo(
 AS $$
 DECLARE 
 var_workspace_id uuid;
-return_repo varchar;
 begin 
 
 SELECT t_workspaces.id into var_workspace_id FROM t_workspaces
 	WHERE workspace = arg_workspace;
-SELECT giturl into return_repo FROM t_workspaces_git WHERE workspace_id = var_workspace_id;
 
-return return_repo;
+return query
+    SELECT giturl FROM t_workspaces_git WHERE workspace_id = var_workspace_id;
 
 end; 
 $$;

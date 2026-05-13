@@ -27,6 +27,9 @@ import { EnvVariablesServer } from '@theia/core/lib/common/env-variables';
 import { WindowService } from '@theia/core/lib/browser/window/window-service';
 import { nls } from '@theia/core/lib/common/nls';
 import axios from 'axios';
+import { createLogger } from './logger';
+
+const log = createLogger('setup');
 
 /**
  * Default implementation of the `GettingStartedWidget`.
@@ -515,13 +518,13 @@ export class GettingStartedWidget extends ReactWidget {
     }
     
     protected doCustomSetup = () => {
+        log.info("requesting custom setup file list");
         axios.get<JSON>('/setupCustom',{},).then((listOfFiles:any) => {
             let selection:QuickPickItem[] = []
-            console.log("CustomSetupTheia");
-            console.log(listOfFiles);
-           
+            log.debug("custom setup response", { status: listOfFiles?.status, count: listOfFiles?.data?.namelist?.length });
+
             for(const ele of listOfFiles.data.namelist){
-                console.log(ele);
+                log.trace("custom setup file entry", { id: ele.id, name: ele.name, type: ele.type });
                 let newQuickPickItem: QuickPickItem = { 
                     label: "File: " + ele.name + " Type: " + ele.type,
                     id: ele.id,

@@ -1,8 +1,8 @@
-ARG NODE_VERSION=16.16.0
-FROM node:${NODE_VERSION}-alpine as base 
+ARG NODE_VERSION=18.20.0
+FROM node:${NODE_VERSION}-alpine AS base 
 
 RUN apk add --no-cache git openssh bash libsecret 
-ENV HOME /home/theia
+ENV HOME=/home/theia
 WORKDIR /home/theia
 # COPY --from=0 --chown=theia:theia /home/theia /home/theia
 
@@ -13,10 +13,10 @@ RUN apk add openjdk11-jre dos2unix
 
 # ADD $version.package.json ./package.json
 # ARG GITHUB_TOKEN
-FROM base as build-ide
+FROM base AS build-ide
 
 ENV THEIA_WEBVIEW_EXTERNAL_ENDPOINT='{{hostname}}'
-ENV NODE_OPTIONS "--max-old-space-size=4096"
+ENV NODE_OPTIONS="--max-old-space-size=4096"
 
 
 
@@ -43,9 +43,11 @@ WORKDIR /home/theia/ide/itlingo-itoi
 RUN rm src/browser/*.ts src/browser/*.tsx src/common/*.ts src/node/*.ts
 WORKDIR /home/theia/ide/browser-app
 
-FROM base as build-plugins
-#Setup language servers folder
-RUN npm install -g @vscode/vsce
+FROM node:20-alpine AS build-plugins
+RUN apk add --no-cache git openssh bash libsecret
+RUN apk add --no-cache make pkgconfig gcc g++ python3 libx11-dev libxkbfile-dev libsecret-dev
+RUN apk add openjdk11-jre dos2unix
+RUN npm install -g @vscode/vsce@2.15.0
 
 #Compile ASL extension
 WORKDIR /home/theia
@@ -82,7 +84,7 @@ RUN vsce package
 RUN mkdir -p /tmp/theia/workspaces/tmp
 
 
-FROM build-ide as setup-server
+FROM build-ide AS setup-server
 COPY --from=build-plugins /home/theia/vscode-code-annotation/code-annotation-0.0.2-dev.vsix /home/theia/ide/plugins
 COPY --from=build-plugins /home/theia/rsl-vscode-extension/rsl-vscode-extension-0.0.1.vsix /home/theia/ide/plugins
 COPY --from=build-plugins /home/theia/asl-langium/asl-langium-0.0.1.vsix /home/theia/ide/plugins
@@ -103,4 +105,7 @@ ENV SHELL=/bin/sh \
    THEIA_DEFAULT_PLUGINS=local-dir:/home/theia/ide/plugins
 
 USER theia
+
+WORKDIR /home/theia/ide/browser-app
+CMD ["yarn", "start", "--hostname", "0.0.0.0", "--port", "3000"]
 
