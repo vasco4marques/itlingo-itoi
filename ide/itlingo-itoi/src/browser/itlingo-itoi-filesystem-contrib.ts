@@ -5,6 +5,9 @@ import { FileUploadResult } from '@theia/filesystem/lib/browser/file-upload-serv
 import { environment } from '@theia/core/shared/@theia/application-package/lib/environment';
 import { WorkspaceService } from '@theia/workspace/lib/browser/workspace-service';
 import { CommandRegistry } from '@theia/core';
+import { createLogger } from './logger';
+
+const log = createLogger('fs');
 
 @injectable()
 export class ItoiFileSystemFrontendContribution extends FileSystemFrontendContribution {
@@ -27,20 +30,22 @@ export class ItoiFileSystemFrontendContribution extends FileSystemFrontendContri
 
 
     protected override async upload(selection: FileSelection | undefined): Promise<FileUploadResult | undefined> {
-        
+
         if(selection && selection.fileStat.isDirectory){
+            log.info("upload to directory", { path: selection.fileStat.resource.toString() });
             return super.upload(selection);
         } else {
-            console.log("fileupload");
-            console.log(this.workspaceService.workspace?.resource);
-            let root = this.workspaceService.workspace?.resource;
+            const root = this.workspaceService.workspace?.resource;
+            log.info("upload to workspace root", { root: root?.toString() });
             if(root) {
-                const fileUploadResult = await this.uploadService.upload(this.workspaceService.tryGetRoots()[0].resource.resolveToAbsolute()?? '');
+                const target = this.workspaceService.tryGetRoots()[0].resource.resolveToAbsolute()?? '';
+                const fileUploadResult = await this.uploadService.upload(target);
+                log.debug("upload completed", { target: target.toString() });
                 return fileUploadResult;
             }
-           
+
         }
-        
+
     }
 
 }

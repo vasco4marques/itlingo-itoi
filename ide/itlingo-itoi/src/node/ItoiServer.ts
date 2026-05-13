@@ -1,5 +1,8 @@
 import { JsonRpcServer } from '@theia/core';
 import {  injectable } from '@theia/core/shared/inversify';
+import { createLogger } from './logger';
+
+const log = createLogger('itoi-server');
 
 const timeoutMS = 10*1000;
 
@@ -12,7 +15,7 @@ setInterval(()=>{
   for(const [user, datetime] of usersAlive){
     const msBetweenDates = (new Date()).getTime() - datetime.getTime();
     if(msBetweenDates>timeoutMS){
-      console.log("user timed out" + user);
+      log.info("user timed out", { username: user, idleMs: msBetweenDates });
       timeoutUser(user);
     }
   }
@@ -69,7 +72,7 @@ export class ItoiServerNode implements ItoiServer {
   }
 
   fileOpened(fileUri: string): void {
-    console.log("file opened"+ fileUri);
+    log.debug("file opened", { username: this.username, fileUri });
     let readers = openedFile.get(fileUri);
      if (readers){
       readers
@@ -84,14 +87,13 @@ export class ItoiServerNode implements ItoiServer {
   }
 
   fileClosed(fileUri: string): void {
-    // console.log("file closed " + fileUri);
     let readers = openedFile.get(fileUri);
      if (readers){
       if (( readers.includes(this.username))){
         let removeIndex = readers.indexOf(this.username);
-        console.log("REMOVE USER: " + this.username + removeIndex + " from readers: " + readers.join(','));
+        log.debug("removing user from readers", { username: this.username, fileUri, removeIndex, readers: readers.slice() });
         readers.splice(removeIndex, 1);
-        console.log("after splice" + readers.join(','));
+        log.debug("readers after close", { fileUri, readers: readers.slice() });
         openedFile.set(fileUri, readers);
         removeFileToUser(this.username, fileUri);
       }
@@ -110,12 +112,13 @@ export class ItoiServerNode implements ItoiServer {
 
   }
   setUsername(username: string): void{
-   this.username = username;   
+   log.info("username bound to itoi-server session", { username });
+   this.username = username;
   }
 
   userPing(): void {
-    //console.log("USER PING " + this.username);
     if (this.username.length>0) {
+      log.trace("user ping", { username: this.username });
       usersAlive.set(this.username, new Date());
     }
   }
