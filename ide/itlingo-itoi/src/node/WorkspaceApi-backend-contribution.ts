@@ -13,13 +13,13 @@ import { Pool, QueryResult }  from 'pg';
 const getDirName = require('path').dirname
 const crypto = require('crypto');
 
-const hostfs = "/tmp/theia/workspaces/";
-export const hostroot = "/home/theia/ide/";
+const hostfs = process.env.HOST_FS || "/tmp/theia/workspaces/";
+export const hostroot = process.env.HOST_ROOT || "/home/theia/ide/";
 const staticFolderLength = 63;
-const COM_KEY = "v8y/B?E(H+MbQeThWmZq4t7w!z$C&F)J";
-const COOKIE_KEY = "0JWVNoq6y7X8hai2r59YY8ILAxC8wcvGODtGvEkv2yKgxlVPfpCeUGqHsoxObdXV";
-const itlingoCloudURL = "https://itlingocloud.herokuapp.com/";
-export const hostname = "itlingocloud.herokuapp.com";
+const COM_KEY = process.env.COM_KEY || "v8y/B?E(H+MbQeThWmZq4t7w!z$C&F)J";
+const COOKIE_KEY = process.env.COOKIE_KEY || "0JWVNoq6y7X8hai2r59YY8ILAxC8wcvGODtGvEkv2yKgxlVPfpCeUGqHsoxObdXV";
+const itlingoCloudURL = process.env.ITLINGO_CLOUD_URL || "http://localhost:8069/";
+export const hostname = new URL(itlingoCloudURL).hostname;
 const workspaces: Map<string, string[]> = new Map<string, string[]>();
 
 type Editor = {
