@@ -9,7 +9,7 @@ import { WidgetFactory, FrontendApplicationContribution, bindViewContribution, W
 import { CommandContribution } from '@theia/core/lib/common';
 
 import '../../src/browser/style/index.css';
-import {  ItoiServer } from '../node/ItoiServer';
+import {  ItoiServer } from '../common/itoi-protocol';
 import { ItoiClientNode } from './ItoiClient';
 import { ItoiFileSystemFrontendContribution } from './itlingo-itoi-filesystem-contrib';
 import { FileSystemFrontendContribution } from '@theia/filesystem/lib/browser/filesystem-frontend-contribution'

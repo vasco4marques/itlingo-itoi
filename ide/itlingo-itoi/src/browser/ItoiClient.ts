@@ -1,5 +1,5 @@
 import {  injectable } from "@theia/core/shared/inversify";
-import { ItoiClient } from "../node/ItoiServer";
+import { ItoiClient } from "../common/itoi-protocol";
 import { createLogger } from "./logger";
 // import { MessageService } from "@theia/core";
 

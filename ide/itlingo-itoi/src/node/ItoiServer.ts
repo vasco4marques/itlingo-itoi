@@ -1,6 +1,8 @@
-import { JsonRpcServer } from '@theia/core';
 import {  injectable } from '@theia/core/shared/inversify';
+import { ItoiClient, ItoiServer } from '../common/itoi-protocol';
 import { createLogger } from './logger';
+
+export { ItoiClient, ItoiServer } from '../common/itoi-protocol';
 
 const log = createLogger('itoi-server');
 
@@ -20,21 +22,6 @@ setInterval(()=>{
     }
   }
 }, 10*1000);
-
-
-export interface ItoiClient {
-    
-}
-
-
-export const ItoiServer = Symbol("ItoiServer");
-export interface ItoiServer extends JsonRpcServer<ItoiClient> {
-    fileOpened(fileUri: string): void;
-    fileClosed(fileUri: string): void;
-    setUsername(username: string): void;
-    getUsersWithFileOpen(fileUri: string): Promise<string[]>;
-    userPing(): void;
-}
 
 
 //revamp  concurrency

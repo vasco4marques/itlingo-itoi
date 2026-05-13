@@ -13,7 +13,7 @@ import { ApplicationShell } from '@theia/core/lib/browser/shell/application-shel
 import  TheiaURI from '@theia/core/lib/common/uri';
 
 import axios from 'axios';
-import { ItoiServer } from '../node/ItoiServer';
+import { ItoiServer } from '../common/itoi-protocol';
 import { createLogger } from './logger';
 // import { SharedStringServer } from '../node/SharedStringServer';
 
