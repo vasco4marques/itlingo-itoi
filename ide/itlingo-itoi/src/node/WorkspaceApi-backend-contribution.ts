@@ -9,6 +9,7 @@ import * as cp from 'child_process'
 import path = require("path");
 import * as uuid from 'uuid';
 import * as session from 'express-session';
+import connectPgSimple = require('connect-pg-simple');
 import { Pool, QueryResult }  from 'pg';
 import { createLogger, redactDbUrl } from './logger';
 const getDirName = require('path').dirname
@@ -29,6 +30,8 @@ const COOKIE_KEY = process.env.COOKIE_KEY || "0JWVNoq6y7X8hai2r59YY8ILAxC8wcvGOD
 const itlingoCloudURL = process.env.ITLINGO_CLOUD_URL || "http://localhost:8069/";
 export const hostname = new URL(itlingoCloudURL).hostname;
 const workspaces: Map<string, string[]> = new Map<string, string[]>();
+const initialPullPaths: Set<string> = new Set<string>();
+const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 
 type Editor = {
     workspace: string;
@@ -110,8 +113,13 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
                 }
                 dbLog.info("fn_pullfiles returned rows", { workspace, count: res.rows.length });
                 res.rows.forEach((element:any) => {
-                    fs.mkdirSync(getDirName(destinationFolder + '/' + element.filename), {recursive: true});
-                    fs.writeFileSync(destinationFolder + '/' + element.filename, element.file);
+                    const fullPath = destinationFolder + '/' + element.filename;
+                    // Mark this path so the nsfw watcher does NOT echo the
+                    // upcoming CREATED/MODIFIED events back to the DB.
+                    initialPullPaths.add(fullPath);
+                    setTimeout(() => initialPullPaths.delete(fullPath), 5000);
+                    fs.mkdirSync(getDirName(fullPath), {recursive: true});
+                    fs.writeFileSync(fullPath, element.file);
                 });
                 workspaceLog.info("wrote pulled files to disk", { workspace, count: res.rows.length, destinationFolder });
                 client.release();
@@ -163,6 +171,10 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
                 watcherLog.debug("ignoring .git path on create", { workspace, file: onlyFile });
                 return;
             }
+            if (initialPullPaths.has(fullfilepath)) {
+                watcherLog.debug("ignoring create event from initial pull", { workspace, file: onlyFile });
+                return;
+            }
             dbLog.info("sp_insertfiles begin", { workspace, file: onlyFile });
             const client = await pgPool.connect();
             let rawData = fs.readFileSync(fullfilepath);
@@ -192,6 +204,10 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
             try {
                 if (onlyFile.substring(0,4)==='.git') {
                     watcherLog.debug("ignoring .git path on modify", { workspace, file: onlyFile });
+                    return;
+                }
+                if (initialPullPaths.has(fullfilepath)) {
+                    watcherLog.debug("ignoring modify event from initial pull", { workspace, file: onlyFile });
                     return;
                 }
                 var rawData = fs.readFileSync(fullfilepath);
@@ -268,7 +284,29 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
         }
         
         cp.execSync("mkdir -p " + hostfs + "tmp/");
-        app.use(session({ secret: COOKIE_KEY, cookie: { maxAge: 60000 }}));
+
+        app.set('trust proxy', 1);
+
+        const PgSession = connectPgSimple(session);
+        const cookieSecure = process.env.ITOI_PROD === "DEV" ? false : true;
+        app.use(session({
+            store: new PgSession({
+                pool: pgPool,
+                tableName: 'user_sessions',
+                createTableIfMissing: true,
+            }),
+            secret: COOKIE_KEY,
+            resave: false,
+            saveUninitialized: false,
+            rolling: false,
+            proxy: true,
+            cookie: {
+                maxAge: SESSION_MAX_AGE_MS,
+                httpOnly: true,
+                sameSite: 'lax',
+                secure: cookieSecure,
+            },
+        }));
 
         // request access logging (status + duration)
         app.use((req, res, next) => {
