@@ -11,6 +11,8 @@ import { Widget } from '@theia/core/lib/browser/widgets';
 import { ILogger } from "@theia/core/lib/common";
 import { ApplicationShell } from '@theia/core/lib/browser/shell/application-shell';
 import  TheiaURI from '@theia/core/lib/common/uri';
+import { EditorManager } from '@theia/editor/lib/browser';
+import { MonacoEditor } from '@theia/monaco/lib/browser/monaco-editor';
 
 import axios from 'axios';
 import { ItoiServer } from '../common/itoi-protocol';
@@ -45,6 +47,7 @@ export class TheiaSendBdFileUpdates extends AbstractViewContribution<GettingStar
     //@inject(CommandService) private readonly commandService: CommandService,
     @inject(ILogger) protected readonly logger: ILogger;
     @inject(ItoiServer) itoiServer: ItoiServer;
+    @inject(EditorManager) protected readonly editorManager: EditorManager;
     constructor(
         
     ) { 
@@ -69,6 +72,22 @@ export class TheiaSendBdFileUpdates extends AbstractViewContribution<GettingStar
     }
 
     private setReadOnly(){
+        if(this.readonly) {
+            monaco.editor.getEditors().forEach(editor => {
+                editor.updateOptions({ readOnly: true });
+            });
+            
+            this.editorManager.onCurrentEditorChanged((editorWidget) => {
+                if (this.readonly && editorWidget?.editor instanceof MonacoEditor) {
+                    editorWidget.editor.getControl().updateOptions({ readOnly: true });
+                }
+            });
+            
+            const allMonacoEditors = MonacoEditor.getAll(this.editorManager);
+            allMonacoEditors.forEach(editor => {
+                editor.getControl().updateOptions({ readOnly: true });
+            });
+        }
         monaco.editor.onDidCreateEditor((codeEditor) =>{
             if(this.readonly) {
                 codeEditor.updateOptions({readOnly: this.readonly});

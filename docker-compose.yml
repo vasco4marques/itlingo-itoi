@@ -1,7 +1,7 @@
 services:
   api:
     container_name: itoi-api
-    image: itoi
+    image: local/itoi:latest
     env_file:
       - .env
     ports:
