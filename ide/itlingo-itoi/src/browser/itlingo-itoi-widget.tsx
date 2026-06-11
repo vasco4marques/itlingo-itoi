@@ -523,25 +523,48 @@ export class GettingStartedWidget extends ReactWidget {
             let selection:QuickPickItem[] = []
             log.debug("custom setup response", { status: listOfFiles?.status, count: listOfFiles?.data?.namelist?.length });
 
-            for(const ele of listOfFiles.data.namelist){
+            const namelist = listOfFiles?.data?.namelist ?? [];
+            if (namelist.length === 0) {
+                this.messageService.info("No importable itlingo cloud documents are available for this workspace.");
+                return;
+            }
+
+            for(const ele of namelist){
                 log.trace("custom setup file entry", { id: ele.id, name: ele.name, type: ele.type });
-                let newQuickPickItem: QuickPickItem = { 
+                let newQuickPickItem: QuickPickItem = {
                     label: "File: " + ele.name + " Type: " + ele.type,
                     id: ele.id,
                     detail: ele.name
                 }
                 selection.push(newQuickPickItem);
             }
-            
-            this.quickInputService.showQuickPick(selection, { 
-                hideCheckAll: false,
-                canSelectMany: true
-            }).then((value) => {
-                axios.get<JSON>('/setupCustomAccepted?fileid='+value?.id +'&filename=' + value?.detail,{ data: value?.id},).then(() => {
+
+            // Use a raw quick pick so that we can read every checked item:
+            // showQuickPick() only resolves to a single item even with
+            // canSelectMany enabled.
+            const quickPick = this.quickInputService.createQuickPick<QuickPickItem>();
+            quickPick.items = selection;
+            quickPick.canSelectMany = true;
+            quickPick.title = 'Import itlingo cloud documents';
+            quickPick.placeholder = 'Select the documents to import into this workspace';
+
+            quickPick.onDidAccept(() => {
+                const picked = quickPick.selectedItems.slice();
+                quickPick.hide();
+                if (picked.length === 0) {
+                    return;
+                }
+                const downloads = picked.map(item =>
+                    axios.get<JSON>('/setupCustomAccepted?fileid=' + item.id + '&filename=' + encodeURIComponent(item.detail ?? ''))
+                );
+                Promise.all(downloads).then(() => {
                     this.messageService.info("Finished setting up itlingo cloud files!");
+                }).catch(() => {
+                    this.messageService.error("Failed to import one or more itlingo cloud files.");
                 });
             });
-            
+
+            quickPick.show();
      });
         
     }

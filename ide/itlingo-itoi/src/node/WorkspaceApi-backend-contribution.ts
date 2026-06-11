@@ -453,10 +453,10 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
 
         app.get('/setupCustom',async (req, res) => {
             let responseItlingoCloud;
-            if(req.session.workspace) {
-                responseItlingoCloud = await setupCustomFiles(req.session.workspace);
+            if(req.session.workspace && req.session.tokens) {
+                responseItlingoCloud = await setupCustomFiles(req.session.workspace, req.session.tokens);
             } else {
-                httpLog.warn("setupCustom without session");
+                httpLog.warn("setupCustom without session", { hasWorkspace: !!req.session.workspace, hasTokens: !!req.session.tokens });
             }
             res.statusCode = 200;
             res.setHeader('Content-Type', 'json/application');
@@ -465,15 +465,15 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
         });
 
         app.get('/setupCustomAccepted',async (req, res) => {
-            if(req.session.workspace) {
+            if(req.session.workspace && req.session.tokens) {
                 cloudLog.info("setupCustomAccepted", {
                     workspaceid: req.session.workspace.workspaceid,
                     filename: req.query.filename,
                     fileid: req.query.fileid,
                 });
-                downloadItlingoFiles(req.session.workspace, req.query.filename as string, req.query.fileid as string);
+                downloadItlingoFiles(req.session.workspace, req.session.tokens, req.query.filename as string, req.query.fileid as string);
             } else {
-                httpLog.warn("setupCustomAccepted without session");
+                httpLog.warn("setupCustomAccepted without session", { hasWorkspace: !!req.session.workspace, hasTokens: !!req.session.tokens });
             }
 
             res.statusCode = 200;
@@ -636,11 +636,190 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
 
 
 
-        async function setupCustomFiles(editor:Editor){
+        function dedupFilename(filename: string, existingNames: Set<string>): string {
+            const existingLower = new Set(Array.from(existingNames).map(n => n.toLowerCase()));
+            if (!existingLower.has(filename.toLowerCase())) return filename;
+            const dotIdx = filename.lastIndexOf('.');
+            const base = dotIdx > 0 ? filename.substring(0, dotIdx) : filename;
+            const suffix = dotIdx > 0 ? filename.substring(dotIdx) : '';
+            let n = 1;
+            while (existingLower.has(`${base}(${n})${suffix}`.toLowerCase())) n++;
+            return `${base}(${n})${suffix}`;
+        }
+
+        async function fetchDbFilenames(workspaceName: string): Promise<Set<string>> {
+            const result = await pgPool.query(
+                'SELECT f.filename FROM t_files f JOIN t_workspaces w ON f.workspace_id = w.id WHERE w.workspace = $1;',
+                [workspaceName],
+            );
+            return new Set<string>(result.rows.map((r: any) => String(r.filename)));
+        }
+
+        // Push a file into a workspace (from ITLingo Cloud, e.g. chatbot exports).
+        // If the workspace is open, the file is written into the live folder AND
+        // persisted to the DB synchronously (the watcher echo is suppressed), so
+        // any failure is reported in the response. If the workspace is closed,
+        // the file is inserted into the DB and delivered on the next open.
+        // Error responses carry a machine-readable `code` so the cloud can
+        // propagate precise failure reasons back to the chatbot.
+        app.post('/pushFile', express.json({ limit: '2mb' }), async (req, res) => {
+            const fail = (status: number, code: string, message: string) => {
+                res.status(status).json({ code, error: message });
+            };
+
+            const authHeader = (req.headers['authorization'] as string) || '';
+            if (!authHeader.startsWith('Bearer ')) {
+                fail(401, 'auth_missing', 'Missing or invalid Authorization header');
+                return;
+            }
+            const tokenParts = authHeader.substring(7).split(':');
+            if (tokenParts.length !== 2) {
+                fail(401, 'auth_invalid', 'Token must be iv:ciphertext');
+                return;
+            }
+            let params: string[];
+            try {
+                params = decrypt(tokenParts[0], tokenParts[1]);
+            } catch (e: any) {
+                cloudLog.warn("pushFile token decrypt failed", { err: e?.message });
+                fail(401, 'auth_invalid', 'Invalid token');
+                return;
+            }
+            const workspaceName = params[0];
+            const write = params[3] === 'true';
+            const wsid = String(params[4]);
+            if (!write) {
+                fail(403, 'write_denied', 'Token does not grant write access');
+                return;
+            }
+
+            const rawFilename = (req.body && req.body.filename) ? String(req.body.filename) : '';
+            const filename = path.basename(rawFilename);
+            if (!filename || filename === '.' || filename === '..') {
+                fail(400, 'invalid_filename', 'Missing or invalid filename');
+                return;
+            }
+            const contentB64 = (req.body && req.body.content) ? String(req.body.content) : '';
+            if (!contentB64) {
+                fail(400, 'invalid_content', 'Missing content');
+                return;
+            }
+            let content: Buffer;
+            try {
+                content = Buffer.from(contentB64, 'base64');
+            } catch {
+                fail(400, 'invalid_content', 'Content must be base64');
+                return;
+            }
+
+            const savedParams = workspaces.get(workspaceName);
+            if (savedParams && String(savedParams[4]) !== wsid) {
+                cloudLog.warn("pushFile wsid mismatch", { workspace: workspaceName, wsid, saved: savedParams[4] });
+                fail(403, 'workspace_mismatch', 'Workspace mismatch');
+                return;
+            }
+
+            if (savedParams) {
+                // Live session: write into the workspace folder and persist to
+                // the DB ourselves so failures surface in this response.
+                const folder = savedParams[5];
+                let existing: Set<string>;
+                try {
+                    existing = new Set(fs.readdirSync(folder));
+                } catch (e: any) {
+                    cloudLog.error("pushFile readdir failed", { workspace: workspaceName, err: e?.message });
+                    fail(500, 'folder_unavailable', 'Workspace folder unavailable');
+                    return;
+                }
+                // Dedup against folder AND DB so neither write can collide.
+                try {
+                    for (const name of await fetchDbFilenames(workspaceName)) existing.add(name);
+                } catch (e: any) {
+                    dbLog.error("pushFile DB filename lookup failed", { workspace: workspaceName, err: e?.message });
+                    fail(500, 'db_error', `Could not read workspace files: ${e?.message || 'unknown error'}`);
+                    return;
+                }
+                const finalName = dedupFilename(filename, existing);
+                const resolvedRoot = path.resolve(folder);
+                const resolvedTarget = path.resolve(path.join(folder, finalName));
+                if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(resolvedRoot + path.sep)) {
+                    cloudLog.error("pushFile rejected unsafe filename", { workspace: workspaceName, filename });
+                    fail(400, 'invalid_filename', 'Invalid filename');
+                    return;
+                }
+                // Suppress the watcher echo for this write: we persist to the
+                // DB synchronously below (same mechanism as pullFilesFromDb).
+                const watcherKey = folder + '/' + finalName;
+                initialPullPaths.add(watcherKey);
+                initialPullPaths.add(resolvedTarget);
+                setTimeout(() => { initialPullPaths.delete(watcherKey); initialPullPaths.delete(resolvedTarget); }, 5000);
+                try {
+                    fs.writeFileSync(resolvedTarget, content);
+                } catch (e: any) {
+                    cloudLog.error("pushFile write failed", { workspace: workspaceName, file: finalName, err: e?.message });
+                    fail(500, 'write_failed', `Failed to write file: ${e?.message || 'unknown error'}`);
+                    return;
+                }
+                try {
+                    // sp_changefile is delete+insert (upsert), so it cannot
+                    // hit the t_files primary-key violation sp_insertfiles can.
+                    await pgPool.query(
+                        'CALL public.sp_changefile($1::varchar,$2::varchar,$3::bytea);',
+                        [finalName, workspaceName, content],
+                    );
+                } catch (e: any) {
+                    dbLog.error("pushFile DB persist failed", { workspace: workspaceName, file: finalName, err: e?.message });
+                    // Keep folder and DB consistent: remove the file we just
+                    // wrote, otherwise it would vanish on the next workspace open.
+                    try { fs.unlinkSync(resolvedTarget); } catch { /* best effort */ }
+                    fail(500, 'db_write_failed', `File could not be persisted: ${e?.message || 'unknown error'}`);
+                    return;
+                }
+                cloudLog.info("pushFile written to live workspace and DB", { workspace: workspaceName, file: finalName });
+                res.status(200).json({ pushed: true, live: true, file_name: finalName });
+                return;
+            }
+
+            // No live session: insert directly into the DB so the file is
+            // delivered on the next workspace open (fn_pullfiles).
+            const client = await pgPool.connect();
+            try {
+                // sp_insertfiles does not create the workspace row; ensure it exists.
+                await client.query(
+                    'INSERT INTO t_workspaces (workspace) VALUES ($1) ON CONFLICT (workspace) DO NOTHING;',
+                    [workspaceName],
+                );
+                const existingRes = await client.query(
+                    'SELECT f.filename FROM t_files f JOIN t_workspaces w ON f.workspace_id = w.id WHERE w.workspace = $1;',
+                    [workspaceName],
+                );
+                const existing = new Set<string>(existingRes.rows.map((r: any) => String(r.filename)));
+                const finalName = dedupFilename(filename, existing);
+                await client.query(
+                    'CALL public.sp_insertfiles($1::varchar,$2::varchar,$3::bytea);',
+                    [finalName, workspaceName, content],
+                );
+                cloudLog.info("pushFile inserted into DB (workspace closed)", { workspace: workspaceName, file: finalName });
+                res.status(200).json({ pushed: true, live: false, file_name: finalName });
+            } catch (e: any) {
+                dbLog.error("pushFile DB insert failed", { workspace: workspaceName, file: filename, err: e?.message });
+                fail(500, 'db_write_failed', `File could not be stored: ${e?.message || 'unknown error'}`);
+            } finally {
+                client.release();
+            }
+        });
+
+        function buildCloudAuthHeader(tokens: { iv: String, t: String }): string {
+            return 'Bearer ' + tokens.iv + ':' + tokens.t;
+        }
+
+        async function setupCustomFiles(editor:Editor, tokens: { iv: String, t: String }){
             const requestPath = 'token_api/get-file-list/' + editor.workspaceid;
             cloudLog.info("get-file-list", { workspaceid: editor.workspaceid, path: requestPath });
             try {
-                const result = await axios.get<JSON>(itlingoCloudURL + requestPath);
+                const result = await axios.get<JSON>(itlingoCloudURL + requestPath, {
+                    headers: { Authorization: buildCloudAuthHeader(tokens) },
+                });
                 cloudLog.info("get-file-list ok", { workspaceid: editor.workspaceid, status: result.status });
                 return result;
             } catch (e:any) {
@@ -649,17 +828,27 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
             }
         }
 
-        async function downloadItlingoFiles(editor:Editor, filename:string,fileId:string){
+        async function downloadItlingoFiles(editor:Editor, tokens: { iv: String, t: String }, filename:string,fileId:string){
             const downloadPath = 'token_api/download-file/' + editor.workspaceid + '/' + fileId;
-            cloudLog.info("download-file begin", { workspaceid: editor.workspaceid, fileId, filename });
+            // Sanitize the filename to its basename and confine the write to the
+            // workspace folder to prevent path traversal (e.g. "../../etc/x").
+            const safeName = path.basename(filename || '');
+            const filenameToWrite = path.join(editor.foldername, safeName);
+            const resolvedRoot = path.resolve(editor.foldername);
+            const resolvedTarget = path.resolve(filenameToWrite);
+            if (!safeName || (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(resolvedRoot + path.sep))) {
+                cloudLog.error("download-file rejected unsafe filename", { workspaceid: editor.workspaceid, fileId, filename });
+                return;
+            }
+            cloudLog.info("download-file begin", { workspaceid: editor.workspaceid, fileId, filename: safeName });
             axios({
                 url: itlingoCloudURL + downloadPath,
                 method: 'GET',
                 responseType: 'blob',
+                headers: { Authorization: buildCloudAuthHeader(tokens) },
             }).then((response) => {
-                let filenameToWrite = editor.foldername + '/' + filename;
-                fs.writeFileSync(filenameToWrite, response.data);
-                cloudLog.info("download-file written to disk", { workspaceid: editor.workspaceid, fileId, filenameToWrite });
+                fs.writeFileSync(resolvedTarget, response.data);
+                cloudLog.info("download-file written to disk", { workspaceid: editor.workspaceid, fileId, filenameToWrite: resolvedTarget });
             }).catch((e:any) => {
                 cloudLog.error("download-file failed", { workspaceid: editor.workspaceid, fileId, err: e?.message });
             });
