@@ -1,9 +1,11 @@
 import { injectable, inject } from '@theia/core/shared/inversify';
-import { CommandContribution,MessageService, CommandHandler, CommandRegistry, MenuContribution, MenuModelRegistry, Command } from '@theia/core/lib/common';
+import { CommandContribution,MessageService, CommandHandler, CommandRegistry, MenuContribution, MenuModelRegistry, Command, QuickPickItem } from '@theia/core/lib/common';
 import { KeybindingContribution, KeybindingRegistry, QuickInputService } from '@theia/core/lib/browser';
+import { createLogger } from './logger';
 import { GIT_COMMANDS, GIT_MENUS } from '@theia/git/lib/browser/git-contribution';
 import { WorkspaceCommands } from '@theia/workspace/lib/browser';
 import { EditorManager } from '@theia/editor/lib/browser'
+import { FileNavigatorContribution } from '@theia/navigator/lib/browser/navigator-contribution';
 
 import {
     TabBarToolbarContribution,
@@ -42,6 +44,13 @@ export const StopCollab : Command = {
     id: 'itoicollab.stopCollab',
     label: 'Stop Collaboration'
 };
+
+export const ImportItlingoCloudDocuments: Command = {
+    id: 'itlingo.import.cloudDocuments',
+    label: 'Import itlingo cloud documents'
+};
+
+const importLog = createLogger('cloud-import');
 
 
 
@@ -101,6 +110,8 @@ export class TheiaExampleCommandContribution implements CommandContribution {
     protected readonly  commands: CommandRegistry;
     @inject(EditorManager)
     protected readonly editorManager: EditorManager;
+    @inject(FileNavigatorContribution)
+    protected readonly fileNavigatorContribution: FileNavigatorContribution;
     constructor(){}
 
 
@@ -171,8 +182,118 @@ export class TheiaExampleCommandContribution implements CommandContribution {
         //     }
         // });
 
-        
+        commands.registerCommand(ImportItlingoCloudDocuments, {
+            execute: () => this.importItlingoCloudDocuments()
+        } as CommandHandler);
 
+    }
+
+    /**
+     * Force the file explorer to re-read the workspace from disk so freshly
+     * imported files appear without a page reload. Retried a couple of times
+     * with small delays to cover any lag between the disk write and the
+     * filesystem provider seeing it.
+     */
+    protected async refreshExplorer(): Promise<void> {
+        const delays = [0, 400, 1200];
+        for (const delay of delays) {
+            if (delay > 0) {
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+            try {
+                await this.fileNavigatorContribution.refreshWorkspace();
+                importLog.debug("refreshed explorer after import", { delay });
+            } catch (e: any) {
+                importLog.warn("could not refresh explorer after import", { delay, err: e?.message });
+            }
+        }
+    }
+
+    /**
+     * Resolve whether the current user has write access to the workspace.
+     * Only write users are allowed to import itlingo cloud documents.
+     */
+    protected async canWrite(): Promise<boolean> {
+        try {
+            const response = await axios.get<any>('/getWorkspace', { withCredentials: true, headers: {
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache',
+                'Expires': '0',
+            } });
+            return response?.data?.readonly === false;
+        } catch (e: any) {
+            importLog.warn("could not resolve workspace permissions", { err: e?.message });
+            return false;
+        }
+    }
+
+    /**
+     * Import documents from the itlingo cloud workspace into the current project.
+     * Lists the available documents, lets the user pick which to import and
+     * downloads the selected ones. Gated behind the write permission check.
+     */
+    async importItlingoCloudDocuments(): Promise<void> {
+        if (!(await this.canWrite())) {
+            this.messageService.error("Importing itlingo cloud documents is only available for users with write access.");
+            return;
+        }
+        importLog.info("requesting itlingo cloud document list");
+        axios.get<any>('/setupCustom', {}).then((listOfFiles: any) => {
+            importLog.debug("itlingo cloud document list response", { status: listOfFiles?.status, count: listOfFiles?.data?.namelist?.length });
+            const namelist = listOfFiles?.data?.namelist ?? [];
+            if (namelist.length === 0) {
+                this.messageService.info("No importable itlingo cloud documents are available for this workspace.");
+                return;
+            }
+
+            const selection: QuickPickItem[] = [];
+            for (const ele of namelist) {
+                selection.push({
+                    label: "File: " + ele.name + " Type: " + ele.type,
+                    id: ele.id,
+                    detail: ele.name
+                });
+            }
+
+            // Use a raw quick pick so that we can read every checked item:
+            // showQuickPick() only resolves to a single item even with
+            // canSelectMany enabled.
+            const quickPick = this.quickInputService.createQuickPick<QuickPickItem>();
+            quickPick.items = selection;
+            quickPick.canSelectMany = true;
+            quickPick.title = 'Import itlingo cloud documents';
+            quickPick.placeholder = 'Select the documents to import into this workspace';
+
+            quickPick.onDidAccept(() => {
+                const picked = quickPick.selectedItems.slice();
+                quickPick.hide();
+                if (picked.length === 0) {
+                    return;
+                }
+                const downloads = picked.map(item =>
+                    axios.get<JSON>('/setupCustomAccepted?fileid=' + item.id + '&filename=' + encodeURIComponent(item.detail ?? ''))
+                );
+                Promise.all(downloads).then(async () => {
+                    // The backend only resolves these requests once the files are
+                    // written to disk, so refreshing now reveals them immediately
+                    // without the user having to reload the explorer. Refresh a few
+                    // times to absorb any filesystem-event lag in the container.
+                    await this.refreshExplorer();
+                    this.messageService.info("Finished setting up itlingo cloud files!");
+                }).catch(() => {
+                    this.messageService.error("Failed to import one or more itlingo cloud files.");
+                });
+            });
+
+            quickPick.show();
+        }).catch((e: any) => {
+            if (e?.response?.status === 403) {
+                this.messageService.error("Importing itlingo cloud documents is only available for users with write access.");
+            } else {
+                importLog.error("failed to list itlingo cloud documents", { err: e?.message });
+                this.messageService.error("Failed to retrieve itlingo cloud documents.");
+            }
+        });
     }
     myGitCheckout() {
         let inputBox1 = this.quickInputService.createInputBox();

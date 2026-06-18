@@ -95,6 +95,42 @@ html, body {
     cursor: default;
 }
 
+.itlingo-cloud-container {
+    padding: 12px 16px;
+}
+
+.itlingo-cloud-header {
+    font-size: var(--theia-ui-font-size2);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.itlingo-cloud-header i {
+    padding-right: 6px;
+}
+
+.itlingo-cloud-description {
+    color: var(--theia-descriptionForeground);
+    margin-bottom: 12px;
+}
+
+.itlingo-cloud-button {
+    width: 100%;
+}
+
+.itlingo-cloud-button:disabled {
+    opacity: var(--theia-mod-disabled-opacity);
+    cursor: default;
+}
+
+.itlingo-cloud-readonly-note {
+    color: var(--theia-descriptionForeground);
+    font-size: var(--theia-ui-font-size0);
+    margin-top: 8px;
+}
+
 .no-right-click {
     -webkit-user-select: none;  /* Chrome all / Safari all */
     -moz-user-select: none;     /* Firefox all */

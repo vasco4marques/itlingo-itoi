@@ -31,6 +31,9 @@ const itlingoCloudURL = process.env.ITLINGO_CLOUD_URL || "http://localhost:8069/
 export const hostname = new URL(itlingoCloudURL).hostname;
 const workspaces: Map<string, string[]> = new Map<string, string[]>();
 const initialPullPaths: Set<string> = new Set<string>();
+// Resolved target paths reserved by in-flight imports so that concurrent
+// downloads of same-named files in one batch don't pick the same dedup name.
+const reservedImportPaths: Set<string> = new Set<string>();
 const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 
 type Editor = {
@@ -454,6 +457,14 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
         app.get('/setupCustom',async (req, res) => {
             let responseItlingoCloud;
             if(req.session.workspace && req.session.tokens) {
+                if(!req.session.workspace.write) {
+                    httpLog.warn("setupCustom denied for read-only user", { workspaceid: req.session.workspace.workspaceid });
+                    res.statusCode = 403;
+                    res.setHeader('Content-Type', 'json/application');
+                    res.json({ error: 'Importing itlingo cloud documents requires write access.' });
+                    res.end();
+                    return;
+                }
                 responseItlingoCloud = await setupCustomFiles(req.session.workspace, req.session.tokens);
             } else {
                 httpLog.warn("setupCustom without session", { hasWorkspace: !!req.session.workspace, hasTokens: !!req.session.tokens });
@@ -466,12 +477,22 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
 
         app.get('/setupCustomAccepted',async (req, res) => {
             if(req.session.workspace && req.session.tokens) {
+                if(!req.session.workspace.write) {
+                    httpLog.warn("setupCustomAccepted denied for read-only user", {
+                        workspaceid: req.session.workspace.workspaceid,
+                        fileid: req.query.fileid,
+                    });
+                    res.statusCode = 403;
+                    res.setHeader('Content-Type', 'text/plain');
+                    res.end();
+                    return;
+                }
                 cloudLog.info("setupCustomAccepted", {
                     workspaceid: req.session.workspace.workspaceid,
                     filename: req.query.filename,
                     fileid: req.query.fileid,
                 });
-                downloadItlingoFiles(req.session.workspace, req.session.tokens, req.query.filename as string, req.query.fileid as string);
+                await downloadItlingoFiles(req.session.workspace, req.session.tokens, req.query.filename as string, req.query.fileid as string);
             } else {
                 httpLog.warn("setupCustomAccepted without session", { hasWorkspace: !!req.session.workspace, hasTokens: !!req.session.tokens });
             }
@@ -828,30 +849,60 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
             }
         }
 
-        async function downloadItlingoFiles(editor:Editor, tokens: { iv: String, t: String }, filename:string,fileId:string){
+        async function downloadItlingoFiles(editor:Editor, tokens: { iv: String, t: String }, filename:string,fileId:string): Promise<void> {
             const downloadPath = 'token_api/download-file/' + editor.workspaceid + '/' + fileId;
             // Sanitize the filename to its basename and confine the write to the
             // workspace folder to prevent path traversal (e.g. "../../etc/x").
             const safeName = path.basename(filename || '');
-            const filenameToWrite = path.join(editor.foldername, safeName);
             const resolvedRoot = path.resolve(editor.foldername);
-            const resolvedTarget = path.resolve(filenameToWrite);
-            if (!safeName || (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(resolvedRoot + path.sep))) {
+            if (!safeName) {
                 cloudLog.error("download-file rejected unsafe filename", { workspaceid: editor.workspaceid, fileId, filename });
                 return;
             }
             cloudLog.info("download-file begin", { workspaceid: editor.workspaceid, fileId, filename: safeName });
-            axios({
-                url: itlingoCloudURL + downloadPath,
-                method: 'GET',
-                responseType: 'blob',
-                headers: { Authorization: buildCloudAuthHeader(tokens) },
-            }).then((response) => {
-                fs.writeFileSync(resolvedTarget, response.data);
-                cloudLog.info("download-file written to disk", { workspaceid: editor.workspaceid, fileId, filenameToWrite: resolvedTarget });
-            }).catch((e:any) => {
+            let response;
+            try {
+                response = await axios({
+                    url: itlingoCloudURL + downloadPath,
+                    method: 'GET',
+                    responseType: 'arraybuffer',
+                    headers: { Authorization: buildCloudAuthHeader(tokens) },
+                });
+            } catch (e:any) {
                 cloudLog.error("download-file failed", { workspaceid: editor.workspaceid, fileId, err: e?.message });
-            });
+                return;
+            }
+            // Don't overwrite an existing file: if the name is already taken,
+            // import as name(1).ext, name(2).ext, ... The read+dedup+reserve+
+            // write below runs synchronously, so concurrent imports in the
+            // same batch cannot resolve to the same name.
+            let existing: Set<string>;
+            try {
+                existing = new Set(fs.readdirSync(editor.foldername));
+            } catch (e:any) {
+                cloudLog.error("download-file readdir failed", { workspaceid: editor.workspaceid, fileId, err: e?.message });
+                existing = new Set<string>();
+            }
+            for (const reserved of reservedImportPaths) {
+                if (path.dirname(reserved) === resolvedRoot) {
+                    existing.add(path.basename(reserved));
+                }
+            }
+            const finalName = dedupFilename(safeName, existing);
+            const resolvedTarget = path.resolve(path.join(editor.foldername, finalName));
+            if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(resolvedRoot + path.sep)) {
+                cloudLog.error("download-file rejected unsafe filename", { workspaceid: editor.workspaceid, fileId, filename });
+                return;
+            }
+            reservedImportPaths.add(resolvedTarget);
+            setTimeout(() => reservedImportPaths.delete(resolvedTarget), 5000);
+            try {
+                fs.writeFileSync(resolvedTarget, Buffer.from(response.data));
+            } catch (e:any) {
+                cloudLog.error("download-file write failed", { workspaceid: editor.workspaceid, fileId, err: e?.message });
+                return;
+            }
+            cloudLog.info("download-file written to disk", { workspaceid: editor.workspaceid, fileId, filenameToWrite: resolvedTarget, deduped: finalName !== safeName });
         }
 
         function copyASLFolder(path:string){

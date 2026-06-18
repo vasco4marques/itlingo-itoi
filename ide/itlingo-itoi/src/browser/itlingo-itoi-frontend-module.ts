@@ -5,6 +5,7 @@ import { ContainerModule, interfaces } from '@theia/core/shared/inversify';
 import { TheiaSendBdFileUpdates } from './itlingo-itoi-frontendcontribution';
 import { GettingStartedWidget } from './itlingo-itoi-widget';
 import {  TheiaExampleCommandContribution } from './itlingo-itoi-menucontribution';
+import { ItlingoCloudWidget, ItlingoCloudViewContribution } from './itlingo-itoi-cloud-widget';
 import { WidgetFactory, FrontendApplicationContribution, bindViewContribution, WebSocketConnectionProvider  } from '@theia/core/lib/browser';
 import { CommandContribution } from '@theia/core/lib/common';
 
@@ -34,6 +35,14 @@ export default new ContainerModule((
         id: GettingStartedWidget.ID,
         createWidget: () => context.container.get<GettingStartedWidget>(GettingStartedWidget),
     })).inSingletonScope();
+
+    bind(ItlingoCloudWidget).toSelf();
+    bind(WidgetFactory).toDynamicValue(context => ({
+        id: ItlingoCloudWidget.ID,
+        createWidget: () => context.container.get<ItlingoCloudWidget>(ItlingoCloudWidget),
+    })).inSingletonScope();
+    bindViewContribution(bind, ItlingoCloudViewContribution);
+    bind(FrontendApplicationContribution).toService(ItlingoCloudViewContribution);
 
     bind(ItoiServer).toDynamicValue(ctx => {
         const connection = ctx.container.get(WebSocketConnectionProvider);

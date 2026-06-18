@@ -18,7 +18,7 @@ import * as React from '@theia/core/shared/react';
 import URI from '@theia/core/lib/common/uri';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import { ReactWidget } from '@theia/core/lib/browser/widgets/react-widget';
-import { QuickPickItem,QuickInputService, MessageService,CommandRegistry, Path } from '@theia/core/lib/common';
+import { MessageService,CommandRegistry, Path } from '@theia/core/lib/common';
 import { WorkspaceCommands, WorkspaceService } from '@theia/workspace/lib/browser';
 import { KeymapsCommands } from '@theia/keymaps/lib/browser';
 import { CommonCommands, LabelProvider, Key, KeyCode, codicon } from '@theia/core/lib/browser';
@@ -27,9 +27,7 @@ import { EnvVariablesServer } from '@theia/core/lib/common/env-variables';
 import { WindowService } from '@theia/core/lib/browser/window/window-service';
 import { nls } from '@theia/core/lib/common/nls';
 import axios from 'axios';
-import { createLogger } from './logger';
-
-const log = createLogger('setup');
+import { ImportItlingoCloudDocuments } from './itlingo-itoi-menucontribution';
 
 /**
  * Default implementation of the `GettingStartedWidget`.
@@ -102,10 +100,6 @@ export class GettingStartedWidget extends ReactWidget {
     
     @inject(MessageService) 
     private readonly messageService: MessageService;
-
-    @inject(QuickInputService) 
-    private readonly quickInputService: QuickInputService;
-    
 
     @postConstruct()
     protected async init(): Promise<void> {
@@ -518,55 +512,7 @@ export class GettingStartedWidget extends ReactWidget {
     }
     
     protected doCustomSetup = () => {
-        log.info("requesting custom setup file list");
-        axios.get<JSON>('/setupCustom',{},).then((listOfFiles:any) => {
-            let selection:QuickPickItem[] = []
-            log.debug("custom setup response", { status: listOfFiles?.status, count: listOfFiles?.data?.namelist?.length });
-
-            const namelist = listOfFiles?.data?.namelist ?? [];
-            if (namelist.length === 0) {
-                this.messageService.info("No importable itlingo cloud documents are available for this workspace.");
-                return;
-            }
-
-            for(const ele of namelist){
-                log.trace("custom setup file entry", { id: ele.id, name: ele.name, type: ele.type });
-                let newQuickPickItem: QuickPickItem = {
-                    label: "File: " + ele.name + " Type: " + ele.type,
-                    id: ele.id,
-                    detail: ele.name
-                }
-                selection.push(newQuickPickItem);
-            }
-
-            // Use a raw quick pick so that we can read every checked item:
-            // showQuickPick() only resolves to a single item even with
-            // canSelectMany enabled.
-            const quickPick = this.quickInputService.createQuickPick<QuickPickItem>();
-            quickPick.items = selection;
-            quickPick.canSelectMany = true;
-            quickPick.title = 'Import itlingo cloud documents';
-            quickPick.placeholder = 'Select the documents to import into this workspace';
-
-            quickPick.onDidAccept(() => {
-                const picked = quickPick.selectedItems.slice();
-                quickPick.hide();
-                if (picked.length === 0) {
-                    return;
-                }
-                const downloads = picked.map(item =>
-                    axios.get<JSON>('/setupCustomAccepted?fileid=' + item.id + '&filename=' + encodeURIComponent(item.detail ?? ''))
-                );
-                Promise.all(downloads).then(() => {
-                    this.messageService.info("Finished setting up itlingo cloud files!");
-                }).catch(() => {
-                    this.messageService.error("Failed to import one or more itlingo cloud files.");
-                });
-            });
-
-            quickPick.show();
-     });
-        
+        this.commandRegistry.executeCommand(ImportItlingoCloudDocuments.id);
     }
 
 }
