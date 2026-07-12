@@ -51,6 +51,27 @@ All runtime configuration is done through environment variables. Defaults are ba
 | `HOST_ROOT` | `/home/theia/ide/` | Path inside the container where helper scripts (`gitUtils/cloneScript.sh`) and templates (`templates/ASL`, `templates/RSL`) are located. |
 | `PORT` | `3000` (compose) | Port Theia binds to. Used by the Heroku `run` command and the docker-compose `CMD`. |
 | `NODE_ENV` | `production` (compose) | Standard Node env flag; some Theia internals branch on this. |
+| `DSL_LSP_PUBLIC_URL` | `http://localhost:3002` | URL where the user's **browser** reaches the dsl-lsp-service sidecar. Served to the frontend by the `itlingo-dsl-runtime` extension via `GET /dslservice/config`. |
+
+### Dynamic DSL language service (dsl-lsp-service)
+
+The `dsl-lsp-service/` sidecar gives ITOI editor support (live diagnostics, completion, hover, go-to-definition) for **any** DSL registered in ITLingoCloud, without building a per-DSL extension. It runs as its own container (`lsp` in docker-compose):
+
+1. At session start, the `itlingo-dsl-runtime` Theia extension reads the launch tokens from `GET /getWorkspace` and asks the sidecar (`GET /dsls?iv=..&t=..`) which DSLs exist.
+2. The sidecar fetches active and draft DSL grammars from ITLingoCloud (`GET {ITLINGO_CLOUD_URL}token_api/get-dsls`, authenticated with the forwarded launch token) and answers with registration metadata.
+3. The frontend registers each DSL in Monaco (language id `itlingo-<acronym>` for an active grammar, `itlingo-<acronym>-draft` for its newest draft) and opens one LSP WebSocket per language (`ws://…/lsp/<languageId>?iv=..&t=..`). The sidecar builds a Langium language server from the grammar text at runtime (`createServicesForGrammar`, Langium pinned to the same version ITLingoCloud validates grammars with).
+
+The bundled ASL/RSL extensions are untouched: their file extensions are reserved (`RESERVED_EXTENSIONS`) and never served dynamically. For each dynamic acronym, the newest active version remains on its canonical extension (for example `.psl`) while its newest draft is served alongside it at the `-draft` extension (for example `.psl-draft`). A draft without an active version is still served only at `-draft`. Grammar changes are picked up on the next IDE reload (the sidecar caches the DSL list for `DSL_CACHE_TTL_MS`, default 60 s).
+
+Sidecar environment:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PORT` | `3001` | Port the sidecar listens on inside the container. |
+| `ITLINGO_CLOUD_URL` | `http://localhost:8069/` | Base URL of ITLingoCloud (Odoo). |
+| `RESERVED_EXTENSIONS` | `rsl,asl` | Comma-separated extensions owned by the bundled extensions. |
+| `DSL_CACHE_TTL_MS` | `60000` | How long a fetched DSL list is reused per session token. |
+| `DSL_LSP_HOST_PORT` | `3002` (compose) | Host port the sidecar is published on; keep `DSL_LSP_PUBLIC_URL` in sync. |
 
 ### Logging
 

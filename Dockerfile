@@ -37,6 +37,8 @@ RUN find node_modules/@theia/cli/bin -type f -print0 | xargs -0 dos2unix
 # RUN yarn theia build
 WORKDIR /home/theia/ide/itlingo-itoi
 RUN yarn
+WORKDIR /home/theia/ide/itlingo-dsl-runtime
+RUN yarn
 WORKDIR /home/theia/ide/browser-app
 RUN yarn
 WORKDIR /home/theia/ide/itlingo-itoi

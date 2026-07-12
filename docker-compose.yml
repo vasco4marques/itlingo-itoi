@@ -1,18 +1,34 @@
 services:
   api:
     container_name: itoi-api
-    image: local/itoi:latest
+    build: .
     env_file:
       - .env
     ports:
       - "${API_HOST_PORT:-3000}:3000"
     expose:
       - "3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - './:/home/theia/projectos'
     depends_on:
       db:
         condition: service_healthy
+      lsp:
+        condition: service_started
+
+  lsp:
+    container_name: itoi-lsp
+    build: ./dsl-lsp-service
+    environment:
+      PORT: "3001"
+      ITLINGO_CLOUD_URL: ${ITLINGO_CLOUD_URL:-http://host.docker.internal:8069/}
+      RESERVED_EXTENSIONS: ${RESERVED_EXTENSIONS:-rsl,asl}
+    ports:
+      - "${DSL_LSP_HOST_PORT:-3002}:3001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   db:
     container_name: itoi-db
