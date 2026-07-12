@@ -1,0 +1,28 @@
+{
+    "name": "dsl-lsp-service",
+    "version": "1.0.0",
+    "description": "Dynamic Langium language server for ITLingoCloud DSLs (ITOI sidecar). Serves LSP over WebSocket for any DSL published or drafted in ITLingoCloud.",
+    "type": "module",
+    "main": "dist/server.js",
+    "scripts": {
+        "build": "tsc",
+        "start": "node dist/server.js",
+        "dev": "tsc && node dist/server.js",
+        "test:registry": "node test/registry.mjs",
+        "test:smoke": "node test/smoke.mjs",
+        "test": "npm run build && npm run test:registry && npm run test:smoke"
+    },
+    "dependencies": {
+        "express": "^4.21.2",
+        "langium": "4.3.1",
+        "vscode-languageserver": "~10.0.1",
+        "vscode-ws-jsonrpc": "^3.4.0",
+        "ws": "^8.18.0"
+    },
+    "devDependencies": {
+        "@types/express": "^4.17.21",
+        "@types/node": "^18.19.0",
+        "@types/ws": "^8.5.10",
+        "typescript": "^5.5.4"
+    }
+}
