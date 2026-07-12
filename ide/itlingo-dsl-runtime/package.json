@@ -1,0 +1,32 @@
+{
+  "name": "itlingo-dsl-runtime",
+  "keywords": [
+    "theia-extension"
+  ],
+  "version": "0.0.0",
+  "description": "Dynamically registers ITLingoCloud DSLs in ITOI and connects them to the external dsl-lsp-service over WebSocket.",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "dependencies": {
+    "@theia/core": "latest",
+    "@theia/monaco": "latest"
+  },
+  "devDependencies": {
+    "rimraf": "latest",
+    "typescript": "latest"
+  },
+  "scripts": {
+    "prepare": "yarn run clean && yarn run build",
+    "clean": "rimraf lib",
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/dsl-runtime-frontend-module",
+      "backend": "lib/node/dsl-runtime-backend-module"
+    }
+  ]
+}

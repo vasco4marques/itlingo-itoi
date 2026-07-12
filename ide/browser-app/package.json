@@ -19,6 +19,7 @@
     "@theia/terminal": "latest",
     "@theia/workspace": "latest",
     "itlingo-itoi": "0.0.0",
+    "itlingo-dsl-runtime": "0.0.0",
     "@theia/plugin-dev": "latest",
     "@theia/plugin-ext": "latest",
     "@theia/plugin-ext-vscode": "latest"

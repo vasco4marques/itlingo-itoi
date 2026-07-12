@@ -14,6 +14,6 @@
     "lerna": "2.4.0"
   },
   "workspaces": [
-    "itlingo-itoi", "browser-app"
+    "itlingo-itoi", "itlingo-dsl-runtime", "browser-app"
   ]
 }
