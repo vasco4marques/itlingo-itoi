@@ -48,7 +48,7 @@ All runtime configuration is done through environment variables. Defaults are ba
 | `COM_KEY` | hardcoded fallback | AES-256-CBC key used to decrypt the `iv`/`t` token pair received on `/createTempWorkspace`. Must match the key ITLingo Cloud encrypts with. **Override in production.** |
 | `COOKIE_KEY` | hardcoded fallback | Secret used to sign `express-session` cookies. **Override in production.** |
 | `HOST_FS` | `/tmp/theia/workspaces/` | Filesystem root where per-session workspace folders (`<HOST_FS>/tmp/<uuid>/<workspace>`) and the nsfw watcher target live. Must be writable by the Theia user. |
-| `HOST_ROOT` | `/home/theia/ide/` | Path inside the container where helper scripts (`gitUtils/cloneScript.sh`) and templates (`templates/ASL`, `templates/RSL`) are located. |
+| `HOST_ROOT` | `/home/theia/ide/` | Path inside the container where helper scripts such as `gitUtils/cloneScript.sh` are located. |
 | `PORT` | `3000` (compose) | Port Theia binds to. Used by the Heroku `run` command and the docker-compose `CMD`. |
 | `NODE_ENV` | `production` (compose) | Standard Node env flag; some Theia internals branch on this. |
 | `DSL_LSP_PUBLIC_URL` | `http://localhost:3002` | URL where the user's **browser** reaches the dsl-lsp-service sidecar. Served to the frontend by the `itlingo-dsl-runtime` extension via `GET /dslservice/config`. |
@@ -61,7 +61,14 @@ The `dsl-lsp-service/` sidecar gives ITOI editor support (live diagnostics, comp
 2. The sidecar fetches active and draft DSL grammars from ITLingoCloud (`GET {ITLINGO_CLOUD_URL}token_api/get-dsls`, authenticated with the forwarded launch token) and answers with registration metadata.
 3. The frontend registers each DSL in Monaco (language id `itlingo-<acronym>` for an active grammar, `itlingo-<acronym>-draft` for its newest draft) and opens one LSP WebSocket per language (`ws://…/lsp/<languageId>?iv=..&t=..`). The sidecar builds a Langium language server from the grammar text at runtime (`createServicesForGrammar`, Langium pinned to the same version ITLingoCloud validates grammars with).
 
-The bundled ASL/RSL extensions are untouched: their file extensions are reserved (`RESERVED_EXTENSIONS`) and never served dynamically. For each dynamic acronym, the newest active version remains on its canonical extension (for example `.psl`) while its newest draft is served alongside it at the `-draft` extension (for example `.psl-draft`). A draft without an active version is still served only at `-draft`. Grammar changes are picked up on the next IDE reload (the sidecar caches the DSL list for `DSL_CACHE_TTL_MS`, default 60 s).
+RSL and ASL use this same dynamic path and are available only when ordinary,
+published records for them exist in ITLingoCloud. Their legacy extension source
+folders remain in the repository for history but are not built into the image.
+For each acronym, the newest active version remains on its canonical extension
+(for example `.psl`) while its newest draft is served alongside it at the
+`-draft` extension (for example `.psl-draft`). A draft without an active version
+is still served only at `-draft`. Grammar changes are picked up on the next IDE
+reload (the sidecar caches the DSL list for `DSL_CACHE_TTL_MS`, default 60 s).
 
 Sidecar environment:
 
@@ -69,9 +76,33 @@ Sidecar environment:
 | --- | --- | --- |
 | `PORT` | `3001` | Port the sidecar listens on inside the container. |
 | `ITLINGO_CLOUD_URL` | `http://localhost:8069/` | Base URL of ITLingoCloud (Odoo). |
-| `RESERVED_EXTENSIONS` | `rsl,asl` | Comma-separated extensions owned by the bundled extensions. |
+| `RESERVED_EXTENSIONS` | empty | Optional comma-separated extensions an operator wants to exclude from dynamic registration. |
 | `DSL_CACHE_TTL_MS` | `60000` | How long a fetched DSL list is reused per session token. |
 | `DSL_LSP_HOST_PORT` | `3002` (compose) | Host port the sidecar is published on; keep `DSL_LSP_PUBLIC_URL` in sync. |
+
+#### Reverse-proxy routing (production)
+
+The sidecar is a **separate origin** from the Theia backend, so the reverse proxy must route `/dsl-lsp/` to it — otherwise `GET /dsl-lsp/dsls` and the `wss://…/dsl-lsp/lsp/<languageId>` WebSocket fall through to Theia, which answers `Cannot GET /dsl-lsp/dsls` and no DSL is registered. On the production host the sidecar is published on `127.0.0.1:${DSL_LSP_HOST_PORT}` (bound to localhost; nginx is the only public entry) and `DSL_LSP_PUBLIC_URL=https://itoi.itlingo.pt/dsl-lsp`. Add this `location` block to the `itoi.itlingo.pt` server (alongside `location /`, which proxies Theia on `:3000`):
+
+```nginx
+# needs the `map $http_upgrade $connection_upgrade { default upgrade; '' close; }`
+# block that the Theia location already relies on.
+location /dsl-lsp/ {
+    proxy_pass http://127.0.0.1:3002/;          # trailing slash strips the /dsl-lsp prefix
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade    $http_upgrade;   # WebSocket for /lsp/<languageId>
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout  3600s;
+    proxy_send_timeout  3600s;
+    proxy_buffering     off;
+}
+```
+
+The trailing slash on `proxy_pass` maps `/dsl-lsp/dsls → /dsls` and `/dsl-lsp/lsp/<id> → /lsp/<id>` (matching the sidecar's `^/lsp/[^/]+$` upgrade check). Verify with `curl https://itoi.itlingo.pt/dsl-lsp/health` (expect `{"status":"ok",…}`). `deploy.sh` does not manage nginx, so this must be applied on the host directly.
 
 ### Logging
 
@@ -115,14 +146,16 @@ Secrets (`DATABASE_URL` password, encrypted session tokens `iv`/`t`, `COM_KEY`, 
 | --- | --- | --- |
 | `NODE_VERSION` | `18.20.0` | Build-arg in the Dockerfile that selects the `node:<version>-alpine` base image for the IDE build stage. |
 | `THEIA_WEBVIEW_EXTERNAL_ENDPOINT` | `{{hostname}}` | Set in the image; required by Theia to allow webview iframes from the runtime host. |
-| `THEIA_DEFAULT_PLUGINS` | `local-dir:/home/theia/ide/plugins` | Where Theia loads the bundled VS Code extensions (asl-langium, rsl-vscode-extension, vscode-code-annotation) from. |
+| `THEIA_DEFAULT_PLUGINS` | `local-dir:/home/theia/ide/plugins` | Where Theia loads the bundled VS Code extensions (currently `vscode-code-annotation`). |
 | `NODE_OPTIONS` | `--max-old-space-size=4096` | Raises Node's heap to 4 GB so the Theia bundle build and Monaco/webpack tooling don't OOM. |
 | `HOME` | `/home/theia` | Container `HOME`; some Theia caches and the `node-gyp` cache resolve under it. |
 | `SHELL` | `/bin/sh` | Used by Theia's integrated terminal. |
 
-### Language-server plugin debugging (only relevant when hacking on the LSPs)
+### Archived language-server plugin debugging
 
-Used inside `plugins/asl-langium/src/extension.ts` and `plugins/rsl-vscode-extension/src/extension.ts`:
+The following variables are used only when manually developing the archived
+`plugins/asl-langium` or `plugins/rsl-vscode-extension` sources. Those plugins
+are no longer built into the ITOI image:
 
 | Variable | Default | Description |
 | --- | --- | --- |

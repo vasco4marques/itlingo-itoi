@@ -8,8 +8,8 @@ function compareVersionsDesc(a, b) {
  * Reduce the raw cloud DSL list to at most two grammars per acronym: the
  * newest active version and the newest draft. Drafts have a decorated
  * language id and file extension so both versions can be opened at once.
- * Extensions reserved by the bundled RSL/ASL extensions are dropped, and an
- * extension already claimed by another dynamic DSL is not claimed twice.
+ * Operator-reserved extensions are dropped, and an extension already claimed
+ * by another dynamic DSL is not claimed twice.
  */
 export function resolveRegistry(dsls) {
     const byAcronym = new Map();
@@ -39,8 +39,7 @@ export function resolveRegistry(dsls) {
     }
     // Active DSLs claim extensions first, then drafts.
     picked.sort((a, b) => a.status === b.status ? a.acronym.localeCompare(b.acronym) : a.status === 'active' ? -1 : 1);
-    // Reserve the draft namespace too: RSL/ASL remain owned by their bundled
-    // extensions even when ITLingoCloud returns a draft for either acronym.
+    // Reserve the decorated draft namespace for every operator exclusion too.
     const claimed = new Set(config.reservedExtensions.flatMap((ext) => [ext, `${ext}-draft`]));
     const resolved = [];
     for (const dsl of picked) {

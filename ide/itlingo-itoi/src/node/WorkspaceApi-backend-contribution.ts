@@ -429,31 +429,6 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
         });
 
 
-        app.get('/setupRSL', (req, res) => {
-            if(req.session.workspace) {
-                httpLog.info("setupRSL", { foldername: req.session.workspace.foldername });
-                copyRSLFolder(req.session.workspace.foldername)
-            } else {
-                httpLog.warn("setupRSL without session");
-            }
-            res.statusCode = 200;
-            res.setHeader('Content-Type', 'text/plain');
-            res.end();
-        });
-
-        app.get('/setupASL', (req, res) => {
-            if(req.session.workspace) {
-                httpLog.info("setupASL", { foldername: req.session.workspace.foldername });
-                copyASLFolder(req.session.workspace.foldername)
-            } else {
-                httpLog.warn("setupASL without session");
-            }
-            res.statusCode = 200;
-            res.setHeader('Content-Type', 'text/plain');
-            res.end();
-        });
-
-
         app.get('/setupCustom',async (req, res) => {
             let responseItlingoCloud;
             if(req.session.workspace && req.session.tokens) {
@@ -905,27 +880,6 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
             cloudLog.info("download-file written to disk", { workspaceid: editor.workspaceid, fileId, filenameToWrite: resolvedTarget, deduped: finalName !== safeName });
         }
 
-        function copyASLFolder(path:string){
-            copyFolder('ASL', path);
-        }
-        function copyRSLFolder(path:string){
-            copyFolder('RSL', path);
-        }
-
-        function copyFolder(arg: string, path:string){
-            switch (arg) {
-                case 'ASL':
-                    fs.cpSync(hostroot + 'templates/ASL/', path, { recursive: true });
-                    break;
-                case 'RSL':
-                    fs.cpSync(hostroot + 'templates/RSL/', path, { recursive: true });
-                    break;
-            
-                default:
-                    break;
-            }
-        }
-
 function createWorkspace(req:Express.Request, params:string[]){
     const workspace = params[0];
     const username = params[1];
@@ -1027,4 +981,3 @@ function getWorkspaceFromPath(foldername: string) : string{
     let arr = foldername.split('/');
     return arr[arr.length-1];
 }
-

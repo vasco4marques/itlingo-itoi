@@ -18,7 +18,7 @@ import * as React from '@theia/core/shared/react';
 import URI from '@theia/core/lib/common/uri';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import { ReactWidget } from '@theia/core/lib/browser/widgets/react-widget';
-import { MessageService,CommandRegistry, Path } from '@theia/core/lib/common';
+import { CommandRegistry, Path } from '@theia/core/lib/common';
 import { WorkspaceCommands, WorkspaceService } from '@theia/workspace/lib/browser';
 import { KeymapsCommands } from '@theia/keymaps/lib/browser';
 import { CommonCommands, LabelProvider, Key, KeyCode, codicon } from '@theia/core/lib/browser';
@@ -26,7 +26,6 @@ import { ApplicationInfo, ApplicationServer } from '@theia/core/lib/common/appli
 import { EnvVariablesServer } from '@theia/core/lib/common/env-variables';
 import { WindowService } from '@theia/core/lib/browser/window/window-service';
 import { nls } from '@theia/core/lib/common/nls';
-import axios from 'axios';
 import { ImportItlingoCloudDocuments } from './itlingo-itoi-menucontribution';
 
 /**
@@ -98,9 +97,6 @@ export class GettingStartedWidget extends ReactWidget {
     @inject(WorkspaceService)
     protected readonly workspaceService: WorkspaceService;
     
-    @inject(MessageService) 
-    private readonly messageService: MessageService;
-
     @postConstruct()
     protected async init(): Promise<void> {
         this.id = GettingStartedWidget.ID;
@@ -171,26 +167,6 @@ export class GettingStartedWidget extends ReactWidget {
     protected setupProject(): React.ReactNode {
         return <div className='gs-section'>
         <h3 className='gs-section-header'><i className={codicon('copy')}></i>{'Setup Project'}</h3>
-            <div className='gs-header'>
-                <div className='gs-action-container'>
-                    <a
-                    role={'button'}
-                    tabIndex={0}
-                    onClick={(e: React.MouseEvent) => this.doSetupRSL()}>
-                    {'Setup RSL project'}
-                    </a>
-                </div>
-            </div>
-            <div className='gs-header'>
-                <div className='gs-action-container'>
-                    <a
-                    role={'button'}
-                    tabIndex={0}
-                    onClick={(e: React.MouseEvent) => this.doSetupASL()}>
-                    {'Setup ASL project'}
-                    </a>
-                </div>
-            </div>
             <div className='gs-header'>
                 <div className='gs-action-container'>
                     <a
@@ -497,20 +473,6 @@ export class GettingStartedWidget extends ReactWidget {
         return Key.ENTER.keyCode === KeyCode.createKeyCode(e.nativeEvent).key?.keyCode;
     }
 
-    protected doSetupRSL = () => {
-        axios.get<JSON>('/setupRSL',{},).then(() => { 
-            
-            this.messageService.info("Finished setting up RSL files!");
-     });
-        
-    }
-
-    protected doSetupASL = () => {
-        axios.get<JSON>('/setupASL',{},).then(() => { 
-            this.messageService.info("Finished setting up ASL files!");
-        });
-    }
-    
     protected doCustomSetup = () => {
         this.commandRegistry.executeCommand(ImportItlingoCloudDocuments.id);
     }

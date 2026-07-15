@@ -89,7 +89,7 @@ const service = spawn('node', ['dist/server.js'], {
         ...process.env,
         PORT: String(SERVICE_PORT),
         ITLINGO_CLOUD_URL: `http://localhost:${MOCK_CLOUD_PORT}/`,
-        RESERVED_EXTENSIONS: 'rsl,asl',
+        RESERVED_EXTENSIONS: '',
     },
     stdio: ['ignore', 'inherit', 'inherit'],
 });

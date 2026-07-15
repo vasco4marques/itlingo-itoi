@@ -1,7 +1,9 @@
 services:
   api:
     container_name: itoi-api
+    image: ${API_IMAGE:-vasco4marques/itoi:latest}
     build: .
+    restart: unless-stopped
     env_file:
       - .env
     ports:
@@ -20,11 +22,13 @@ services:
 
   lsp:
     container_name: itoi-lsp
+    image: ${LSP_IMAGE:-vasco4marques/itoi-lsp:latest}
     build: ./dsl-lsp-service
+    restart: unless-stopped
     environment:
       PORT: "3001"
       ITLINGO_CLOUD_URL: ${ITLINGO_CLOUD_URL:-http://host.docker.internal:8069/}
-      RESERVED_EXTENSIONS: ${RESERVED_EXTENSIONS:-rsl,asl}
+      RESERVED_EXTENSIONS: ${RESERVED_EXTENSIONS:-}
     ports:
       - "${DSL_LSP_HOST_PORT:-3002}:3001"
     extra_hosts:

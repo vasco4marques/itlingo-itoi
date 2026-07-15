@@ -50,9 +50,15 @@ assert.deepEqual(
 );
 
 assert.deepEqual(
-    resolveRegistry([dsl({ acronym: 'RSL', version: '1.1', status: 'draft', fileExtensions: ['rsl'] })]),
-    [],
-    'reserved bundled extensions are not exposed through the draft namespace',
+    summary(resolveRegistry([
+        dsl({ acronym: 'RSL', version: '1.0', status: 'active', fileExtensions: ['rsl'] }),
+        dsl({ acronym: 'RSL', version: '1.1', status: 'draft', fileExtensions: ['rsl'] }),
+    ])),
+    [
+        { languageId: 'itlingo-rsl', extensions: ['rsl'], status: 'active', version: '1.0' },
+        { languageId: 'itlingo-rsl-draft', extensions: ['rsl-draft'], status: 'draft', version: '1.1' },
+    ],
+    'formerly bundled language extensions use the dynamic path too',
 );
 
 console.log('REGISTRY TEST PASSED');

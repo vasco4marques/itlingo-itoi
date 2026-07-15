@@ -6,12 +6,11 @@ export const config = {
     /** Base URL of ITLingoCloud (Odoo), same semantics as ITOI's ITLINGO_CLOUD_URL. */
     itlingoCloudUrl: normalizeBaseUrl(process.env.ITLINGO_CLOUD_URL ?? 'http://localhost:8069/'),
     /**
-     * File extensions (without dot) owned by the statically built ITOI
-     * extensions (asl-langium, rsl-vscode-extension). DSLs claiming these
-     * extensions are never served dynamically, so the bundled extensions
-     * are not shadowed or duplicated.
+     * Optional file extensions (without dot) that operators want to exclude
+     * from dynamic registration, for example to avoid a local extension
+     * collision. No extensions are reserved by default.
      */
-    reservedExtensions: (process.env.RESERVED_EXTENSIONS ?? 'rsl,asl')
+    reservedExtensions: (process.env.RESERVED_EXTENSIONS ?? '')
         .split(',')
         .map((ext) => ext.trim().replace(/^\./, '').toLowerCase())
         .filter((ext) => ext.length > 0),

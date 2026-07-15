@@ -12,9 +12,8 @@ const log = {
  * On startup: fetch the session launch tokens (already exposed by the ITOI
  * backend's /getWorkspace), ask the dsl-lsp-service which ITLingoCloud DSLs
  * are available, register each one in Monaco, and connect a language client.
- * The bundled RSL/ASL extensions are unaffected: the service never serves
- * their file extensions, and a defensive check below skips any extension
- * Monaco already knows.
+ * A defensive check below skips any extension Monaco already knows, while the
+ * sidecar's optional reservation list can exclude operator-owned extensions.
  */
 @injectable()
 export class DslRuntimeFrontendContribution implements FrontendApplicationContribution {

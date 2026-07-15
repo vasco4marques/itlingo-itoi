@@ -51,29 +51,7 @@ RUN apk add --no-cache make pkgconfig gcc g++ python3 libx11-dev libxkbfile-dev 
 RUN apk add openjdk11-jre dos2unix
 RUN npm install -g @vscode/vsce@2.15.0
 
-#Compile ASL extension
-WORKDIR /home/theia
-COPY plugins/asl-langium /home/theia/asl-langium
-RUN dos2unix /home/theia/asl-langium/server/asl/bin/generator.sh
-RUN dos2unix /home/theia/asl-langium/server/asl/bin/importer.sh
-RUN chmod +x /home/theia/asl-langium/server/asl/bin/generator.sh
-RUN chmod +x /home/theia/asl-langium/server/asl/bin/importer.sh
-WORKDIR /home/theia/asl-langium
-RUN yarn
-RUN vsce package
-#RUN cp asl-langium-0.0.1.vsix /home/theia/ide/plugins
-#RUN cd .. && rm -rf asl-langium
-
-#Compile RSL extension
-WORKDIR /home/theia
-COPY plugins/rsl-vscode-extension /home/theia/rsl-vscode-extension
-WORKDIR /home/theia/rsl-vscode-extension
-RUN yarn
-RUN vsce package
-#RUN cp rsl-vscode-extension-0.0.1.vsix /home/theia/ide/plugins
-#RUN cd .. && rm -rf rsl-vscode-extension
-
-#Compile RSL extension
+# Compile the code-annotation extension
 WORKDIR /home/theia
 COPY plugins/vscode-code-annotation /home/theia/vscode-code-annotation
 WORKDIR /home/theia/vscode-code-annotation
@@ -88,8 +66,6 @@ RUN mkdir -p /tmp/theia/workspaces/tmp
 
 FROM build-ide AS setup-server
 COPY --from=build-plugins /home/theia/vscode-code-annotation/code-annotation-0.0.2-dev.vsix /home/theia/ide/plugins
-COPY --from=build-plugins /home/theia/rsl-vscode-extension/rsl-vscode-extension-0.0.1.vsix /home/theia/ide/plugins
-COPY --from=build-plugins /home/theia/asl-langium/asl-langium-0.0.1.vsix /home/theia/ide/plugins
 
 COPY pack /home/theia/pack
 RUN chmod 777 -R /home/theia/pack
@@ -110,4 +86,3 @@ USER theia
 
 WORKDIR /home/theia/ide/browser-app
 CMD ["yarn", "start", "--hostname", "0.0.0.0", "--port", "3000"]
-
