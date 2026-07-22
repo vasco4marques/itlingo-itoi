@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { resolveRegistry } from '../dist/registry.js';
+import { resolveRegistry, toClientDescriptor } from '../dist/registry.js';
 
 const grammar = 'grammar Example entry Model: name=ID; terminal ID: /[a-z]+/;';
 
-function dsl({ acronym = 'PSL', version, status, fileExtensions = ['psl'] }) {
+function dsl({ acronym = 'PSL', version, status, fileExtensions = ['psl'], services, servicesDigest }) {
     return {
         acronym,
         name: 'Project Specification Language',
@@ -12,6 +12,8 @@ function dsl({ acronym = 'PSL', version, status, fileExtensions = ['psl'] }) {
         file_extensions: fileExtensions,
         grammar,
         digest: `${status}-${version}`,
+        services,
+        services_digest: servicesDigest,
     };
 }
 
@@ -60,5 +62,22 @@ assert.deepEqual(
     ],
     'formerly bundled language extensions use the dynamic path too',
 );
+
+const [dslWithServices] = resolveRegistry([
+    dsl({
+        version: '2.0',
+        status: 'active',
+        services: 'export default { references: {} };',
+        servicesDigest: 'services-digest-2.0',
+    }),
+]);
+assert.equal(dslWithServices.services, 'export default { references: {} };');
+assert.equal(dslWithServices.servicesDigest, 'services-digest-2.0');
+const descriptor = toClientDescriptor(dslWithServices);
+assert.equal(descriptor.hasServices, true, 'client metadata identifies DSLs with custom services');
+assert.equal('services' in descriptor, false, 'services code is never sent to the browser client');
+
+const [dslWithoutServices] = resolveRegistry([dsl({ version: '2.1', status: 'active' })]);
+assert.equal(toClientDescriptor(dslWithoutServices).hasServices, false);
 
 console.log('REGISTRY TEST PASSED');

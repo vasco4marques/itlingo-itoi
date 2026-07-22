@@ -64,6 +64,8 @@ export function resolveRegistry(dsls) {
             extensions,
             grammar: dsl.grammar,
             digest: dsl.digest,
+            services: dsl.services,
+            servicesDigest: dsl.services_digest,
         });
     }
     return resolved;
@@ -80,6 +82,7 @@ export function toClientDescriptor(dsl) {
         status: dsl.status,
         languageId: dsl.languageId,
         extensions: dsl.extensions,
+        hasServices: Boolean(dsl.services),
         keywords: extractKeywords(dsl.grammar, dsl.digest),
     };
 }

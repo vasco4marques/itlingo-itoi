@@ -9,6 +9,10 @@ export interface CloudDsl {
     file_extensions: string[];
     grammar: string;
     digest: string;
+    /** Compiled ESM Langium services module supplied by the DSL author. */
+    services?: string;
+    /** Digest of the compiled services artifact, used as its runtime cache key. */
+    services_digest?: string;
 }
 
 interface CacheEntry {

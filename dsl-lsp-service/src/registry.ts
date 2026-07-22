@@ -14,6 +14,8 @@ export interface ResolvedDsl {
     extensions: string[];
     grammar: string;
     digest: string;
+    services?: string;
+    servicesDigest?: string;
 }
 
 function compareVersionsDesc(a: CloudDsl, b: CloudDsl): number {
@@ -86,6 +88,8 @@ export function resolveRegistry(dsls: CloudDsl[]): ResolvedDsl[] {
             extensions,
             grammar: dsl.grammar,
             digest: dsl.digest,
+            services: dsl.services,
+            servicesDigest: dsl.services_digest,
         });
     }
     return resolved;
@@ -104,6 +108,7 @@ export function toClientDescriptor(dsl: ResolvedDsl) {
         status: dsl.status,
         languageId: dsl.languageId,
         extensions: dsl.extensions,
+        hasServices: Boolean(dsl.services),
         keywords: extractKeywords(dsl.grammar, dsl.digest),
     };
 }

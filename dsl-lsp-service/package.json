@@ -9,8 +9,9 @@
         "start": "node dist/server.js",
         "dev": "tsc && node dist/server.js",
         "test:registry": "node test/registry.mjs",
+        "test:services": "node test/services.mjs",
         "test:smoke": "node test/smoke.mjs",
-        "test": "npm run build && npm run test:registry && npm run test:smoke"
+        "test": "npm run build && npm run test:registry && npm run test:services && npm run test:smoke"
     },
     "dependencies": {
         "express": "^4.21.2",

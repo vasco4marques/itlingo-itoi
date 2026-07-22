@@ -6,3 +6,4 @@ lib
 !*-app/package.json
 db
 .env
+dsl-lsp-service/.runtime-modules/
