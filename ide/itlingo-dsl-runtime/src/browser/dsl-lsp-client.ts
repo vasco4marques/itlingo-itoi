@@ -36,6 +36,7 @@ export class DslLanguageClient {
     private readonly pendingRequests = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
     private readonly documentVersions = new Map<string, number>();
     private readonly markerOwner: string;
+    private startPromise: Promise<void> | undefined;
 
     constructor(
         private readonly descriptor: DslDescriptor,
@@ -44,10 +45,29 @@ export class DslLanguageClient {
         this.markerOwner = `dsl-runtime-${descriptor.languageId}`;
     }
 
-    async start(): Promise<void> {
-        await this.connect();
+    /** Eager, no socket: providers + the watcher that triggers activation. */
+    register(): void {
         this.registerProviders();
-        this.trackModels();
+        this.watchModels();
+    }
+
+    /** Idempotent; opens the socket on first call. */
+    ensureStarted(): Promise<void> {
+        if (!this.startPromise) {
+            this.startPromise = this.connect()
+                .then(() => {
+                    // Backfill: models opened before the socket was ready.
+                    for (const model of monaco.editor.getModels()) {
+                        this.adoptModel(model);
+                    }
+                })
+                .catch(error => {
+                    // Do not cache the failure — let a later model-open retry.
+                    this.startPromise = undefined;
+                    throw error;
+                });
+        }
+        return this.startPromise;
     }
 
     // ------------------------------------------------------------------
@@ -157,17 +177,26 @@ export class DslLanguageClient {
         return this.descriptor.extensions.some(ext => path.endsWith(`.${ext}`));
     }
 
-    private trackModels(): void {
+    private watchModels(): void {
         for (const model of monaco.editor.getModels()) {
-            this.adoptModel(model);
+            this.considerModel(model);
         }
-        monaco.editor.onDidCreateModel(model => this.adoptModel(model));
+        monaco.editor.onDidCreateModel(model => this.considerModel(model));
         monaco.editor.onWillDisposeModel(model => {
             const uri = model.uri.toString();
             if (this.documentVersions.delete(uri)) {
                 this.sendNotification('textDocument/didClose', { textDocument: { uri } });
             }
         });
+    }
+
+    private considerModel(model: monaco.editor.ITextModel): void {
+        if (model.uri.scheme !== 'file' || !this.matchesLanguage(model)) {
+            return;
+        }
+        this.ensureStarted()
+            .then(() => this.adoptModel(model))
+            .catch(error => log.warn(`could not start ${this.descriptor.acronym}`, error));
     }
 
     private adoptModel(model: monaco.editor.ITextModel): void {

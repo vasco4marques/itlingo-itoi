@@ -11,12 +11,15 @@ const log = {
 /**
  * On startup: fetch the session launch tokens (already exposed by the ITOI
  * backend's /getWorkspace), ask the dsl-lsp-service which ITLingoCloud DSLs
- * are available, register each one in Monaco, and connect a language client.
+ * are available, and register each one in Monaco. Its language client connects
+ * lazily when the first matching model is opened.
  * A defensive check below skips any extension Monaco already knows, while the
  * sidecar's optional reservation list can exclude operator-owned extensions.
  */
 @injectable()
 export class DslRuntimeFrontendContribution implements FrontendApplicationContribution {
+
+    protected readonly clients: DslLanguageClient[] = [];
 
     onStart(): void {
         this.setup().catch(error => log.warn('dynamic DSL setup skipped', error));
@@ -73,14 +76,14 @@ export class DslRuntimeFrontendContribution implements FrontendApplicationContri
         const webSocketBase = baseUrl.replace(/^http/, 'ws');
         for (const dsl of dsls) {
             try {
-                await this.registerDsl(dsl, `${webSocketBase}/lsp/${encodeURIComponent(dsl.languageId)}?${query}`);
+                this.registerDsl(dsl, `${webSocketBase}/lsp/${encodeURIComponent(dsl.languageId)}?${query}`);
             } catch (error) {
                 log.warn(`failed to set up DSL ${dsl.acronym}`, error);
             }
         }
     }
 
-    protected async registerDsl(dsl: DslDescriptor, webSocketUrl: string): Promise<void> {
+    protected registerDsl(dsl: DslDescriptor, webSocketUrl: string): void {
         const alreadyClaimed = new Set<string>();
         for (const language of monaco.languages.getLanguages()) {
             for (const ext of language.extensions ?? []) {
@@ -101,7 +104,8 @@ export class DslRuntimeFrontendContribution implements FrontendApplicationContri
         this.registerHighlighting(dsl);
 
         const client = new DslLanguageClient({ ...dsl, extensions }, webSocketUrl);
-        await client.start();
+        this.clients.push(client);
+        client.register();
         log.info(`registered DSL ${dsl.acronym} ${dsl.version} (${dsl.status}) for .${extensions.join(', .')}`);
     }
 
