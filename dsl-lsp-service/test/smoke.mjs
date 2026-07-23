@@ -74,6 +74,8 @@ const mockCloud = http.createServer((req, res) => {
                     file_extensions: ['psl'],
                     grammar: DRAFT_GRAMMAR,
                     digest: 'testdigest0002',
+                    services: 'export default () => { throw new Error("smoke load failure"); };',
+                    services_digest: 'broken-services-smoke-v1',
                 },
             ],
         }));
@@ -129,6 +131,8 @@ let nextId = 1;
 const pendingResponses = new Map();
 const diagnosticsEvents = [];
 let diagnosticsWaiter = null;
+const showMessageEvents = [];
+let showMessageWaiter = null;
 
 ws.on('message', (data) => {
     const message = JSON.parse(data.toString());
@@ -140,6 +144,13 @@ ws.on('message', (data) => {
         if (diagnosticsWaiter) {
             const waiter = diagnosticsWaiter;
             diagnosticsWaiter = null;
+            waiter(message.params);
+        }
+    } else if (message.method === 'window/showMessage') {
+        showMessageEvents.push(message.params);
+        if (showMessageWaiter) {
+            const waiter = showMessageWaiter;
+            showMessageWaiter = null;
             waiter(message.params);
         }
     }
@@ -165,6 +176,17 @@ function waitForDiagnostics() {
     });
 }
 
+function waitForShowMessage() {
+    return new Promise((resolve, reject) => {
+        if (showMessageEvents.length) {
+            resolve(showMessageEvents.at(-1));
+            return;
+        }
+        showMessageWaiter = resolve;
+        setTimeout(() => reject(new Error('timeout waiting for window/showMessage')), 10000);
+    });
+}
+
 const initResult = await sendRequest('initialize', {
     processId: null,
     rootUri: null,
@@ -172,8 +194,18 @@ const initResult = await sendRequest('initialize', {
     capabilities: {},
 });
 if (!initResult.result?.capabilities) fail('initialize returned no capabilities');
+await new Promise((resolve) => setImmediate(resolve));
+if (showMessageEvents.length) {
+    fail('services fallback error was delivered before the initialized notification');
+}
+const showMessagePromise = waitForShowMessage();
 sendNotification('initialized', {});
+const showMessage = await showMessagePromise;
+if (showMessage.type !== 1 || !showMessage.message.includes('smoke load failure')) {
+    fail(`expected services load error toast, got: ${JSON.stringify(showMessage)}`);
+}
 console.log('OK  initialize handshake');
+console.log('OK  services fallback error delivered after initialize');
 
 const uri = 'file:///workspace/test.psl';
 let diagnosticsPromise = waitForDiagnostics();
