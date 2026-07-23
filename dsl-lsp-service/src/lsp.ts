@@ -6,8 +6,13 @@ import type { Module } from 'langium';
 import { createServicesForGrammar } from 'langium/grammar';
 import { startLanguageServer } from 'langium/lsp';
 import type { LangiumServices, LangiumSharedServices } from 'langium/lsp';
-import { createConnection } from 'vscode-languageserver/node';
+import {
+    createConnection,
+    MessageType,
+    ShowMessageNotification,
+} from 'vscode-languageserver/node';
 import type { MessageReader, MessageWriter } from 'vscode-languageserver/node';
+import { config } from './config.js';
 import type { ResolvedDsl } from './registry.js';
 
 const appDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -15,6 +20,28 @@ const runtimeModulesDirectory = resolve(appDirectory, '.runtime-modules');
 const materializedModules = new Map<string, Promise<string>>();
 
 type DslServicesModule = Module<LangiumServices, unknown>;
+type ServicesLoadFailureHandler = (error: unknown) => void;
+
+async function withTimeout<T>(
+    operation: Promise<T>,
+    timeoutMs: number,
+    description: string,
+): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+            reject(new Error(`${description} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+        timer.unref();
+    });
+    try {
+        return await Promise.race([operation, timeout]);
+    } finally {
+        if (timer) {
+            clearTimeout(timer);
+        }
+    }
+}
 
 function servicesCacheKey(dsl: ResolvedDsl): string {
     // Hash even a cloud-supplied digest so it can never escape the cache directory
@@ -56,8 +83,15 @@ async function loadServicesModule(dsl: ResolvedDsl): Promise<DslServicesModule> 
     const exported = typeof imported.default === 'function'
         ? (imported.default as () => unknown)()
         : imported.default;
-    if (typeof exported !== 'object' || exported === null || Array.isArray(exported)) {
-        throw new TypeError('The services module default export must be a module object or factory');
+    if (
+        typeof exported !== 'object'
+        || exported === null
+        || Array.isArray(exported)
+        || typeof (exported as { then?: unknown }).then === 'function'
+    ) {
+        throw new TypeError(
+            'The services module default export must be a synchronous module object or factory',
+        );
     }
     return exported as DslServicesModule;
 }
@@ -84,17 +118,28 @@ function grammarConfig(
 export async function createDslServices(
     dsl: ResolvedDsl,
     sharedModule?: Module<LangiumSharedServices, unknown>,
+    onServicesLoadFailure?: ServicesLoadFailureHandler,
 ): Promise<LangiumServices> {
     if (dsl.services) {
         try {
-            const module = await loadServicesModule(dsl);
-            return await createServicesForGrammar(grammarConfig(dsl, sharedModule, module));
+            return await withTimeout((async () => {
+                const module = await loadServicesModule(dsl);
+                return createServicesForGrammar(grammarConfig(dsl, sharedModule, module));
+            })(), config.dslServicesBuildTimeoutMs, 'Custom services build');
         } catch (error) {
             console.error(
                 `[dsl-services] Failed to load services for ${dsl.acronym} ${dsl.version} `
                 + `(${dsl.status}); falling back to Langium defaults:`,
                 error,
             );
+            try {
+                onServicesLoadFailure?.(error);
+            } catch (notificationError) {
+                console.error(
+                    '[dsl-services] Failed to surface the services load error:',
+                    notificationError,
+                );
+            }
         }
     }
     return createServicesForGrammar(grammarConfig(dsl, sharedModule));
@@ -112,12 +157,27 @@ export async function serveLspSession(
     dsl: ResolvedDsl,
 ): Promise<void> {
     const connection = createConnection(reader, writer);
+    let servicesLoadError: unknown;
     const services = await createDslServices(dsl, {
         // Injected last, so it overrides the default (absent) connection and
         // turns the grammar services into a fully wired language server.
         lsp: {
             Connection: () => connection,
         },
-    } as any);
+    } as any, (error) => {
+        servicesLoadError = error;
+    });
+    if (servicesLoadError !== undefined) {
+        services.shared.lsp.LanguageServer.onInitialized(() => {
+            const detail = servicesLoadError instanceof Error
+                ? servicesLoadError.message
+                : String(servicesLoadError);
+            void connection.sendNotification(ShowMessageNotification.type, {
+                type: MessageType.Error,
+                message: `Custom services for ${dsl.acronym} ${dsl.version} failed to load. `
+                    + `The editor is using default language services for this session. ${detail}`,
+            });
+        });
+    }
     startLanguageServer(services.shared);
 }

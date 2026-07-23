@@ -25,12 +25,55 @@ services:
     image: ${LSP_IMAGE:-vasco4marques/itoi-lsp:latest}
     build: ./dsl-lsp-service
     restart: unless-stopped
+    init: true
+    read_only: true
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 768m
+    cpus: 1.0
     environment:
       PORT: "3001"
-      ITLINGO_CLOUD_URL: ${ITLINGO_CLOUD_URL:-http://host.docker.internal:8069/}
+      ITLINGO_CLOUD_URL: http://lsp-cloud-proxy:8080/
       RESERVED_EXTENSIONS: ${RESERVED_EXTENSIONS:-}
+      DSL_CACHE_TTL_MS: ${DSL_CACHE_TTL_MS:-60000}
+      DSL_SERVICES_BUILD_TIMEOUT_MS: ${DSL_SERVICES_BUILD_TIMEOUT_MS:-10000}
+    tmpfs:
+      - /app/.runtime-modules:rw,nosuid,nodev,noexec,size=64m,mode=0700,uid=10001,gid=10001
     ports:
-      - "${DSL_LSP_HOST_PORT:-3002}:3001"
+      - "127.0.0.1:${DSL_LSP_HOST_PORT:-3002}:3001"
+    networks:
+      - lsp-isolated
+    depends_on:
+      lsp-cloud-proxy:
+        condition: service_started
+
+  lsp-cloud-proxy:
+    image: nginxinc/nginx-unprivileged:1.27-alpine
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 64m
+    cpus: 0.25
+    environment:
+      CLOUD_UPSTREAM: ${ITLINGO_CLOUD_URL:-http://host.docker.internal:8069/}
+    volumes:
+      - ./dsl-lsp-service/cloud-proxy.conf.template:/etc/nginx/templates/default.conf.template:ro
+    tmpfs:
+      - /etc/nginx/conf.d:rw,nosuid,nodev,noexec,size=1m,mode=0755,uid=101,gid=101
+      - /tmp:rw,nosuid,nodev,noexec,size=8m,mode=1777
+      - /var/cache/nginx:rw,nosuid,nodev,noexec,size=8m,mode=0755,uid=101,gid=101
+      - /var/run:rw,nosuid,nodev,noexec,size=1m,mode=0755,uid=101,gid=101
+    networks:
+      - lsp-isolated
+      - default
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -53,3 +96,8 @@ services:
 volumes:
   db-data:
     driver: local
+
+networks:
+  default:
+  lsp-isolated:
+    internal: true

@@ -78,7 +78,32 @@ Sidecar environment:
 | `ITLINGO_CLOUD_URL` | `http://localhost:8069/` | Base URL of ITLingoCloud (Odoo). |
 | `RESERVED_EXTENSIONS` | empty | Optional comma-separated extensions an operator wants to exclude from dynamic registration. |
 | `DSL_CACHE_TTL_MS` | `60000` | How long a fetched DSL list is reused per session token. |
+| `DSL_SERVICES_BUILD_TIMEOUT_MS` | `10000` | Maximum time allowed to load an author module and build its custom Langium services before falling back to defaults. |
 | `DSL_LSP_HOST_PORT` | `3002` (compose) | Host port the sidecar is published on; keep `DSL_LSP_PUBLIC_URL` in sync. |
+
+#### Sidecar containment
+
+The production Compose service treats author-supplied services modules as
+untrusted code. The sidecar runs as UID/GID `10001`, with all Linux
+capabilities dropped, `no-new-privileges`, a read-only root filesystem, PID,
+CPU, and memory limits, and a 64 MiB tmpfs mounted at the exact module cache
+path `/app/.runtime-modules`. The cache tmpfs is required: without it module
+materialization fails and the editor visibly falls back to default Langium
+services.
+
+The sidecar is attached only to the `lsp-isolated` internal Docker network. A
+separate unprivileged nginx container exposes exactly
+`GET /token_api/get-dsls` to it and performs the Cloud request on the normal
+network. Author code therefore has no direct internet, host, or cloud-metadata
+route. The proxy intentionally forwards the per-request `Authorization`
+header; the current launch token is consequently still visible to code already
+executing inside that LSP process. Do not place any other secrets in the
+sidecar environment.
+
+Node timeouts cannot preempt JavaScript that blocks the event loop
+synchronously. The container resource limits and periodic restart/redeployment
+bound that residual case; the timeout handles imports and service construction
+that yield normally.
 
 #### Reverse-proxy routing (production)
 

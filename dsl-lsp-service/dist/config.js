@@ -1,8 +1,12 @@
 function normalizeBaseUrl(url) {
     return url.endsWith('/') ? url : url + '/';
 }
+function positiveInteger(value, fallback) {
+    const parsed = Number.parseInt(value ?? '', 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 export const config = {
-    port: parseInt(process.env.PORT ?? '3001', 10),
+    port: positiveInteger(process.env.PORT, 3001),
     /** Base URL of ITLingoCloud (Odoo), same semantics as ITOI's ITLINGO_CLOUD_URL. */
     itlingoCloudUrl: normalizeBaseUrl(process.env.ITLINGO_CLOUD_URL ?? 'http://localhost:8069/'),
     /**
@@ -15,5 +19,10 @@ export const config = {
         .map((ext) => ext.trim().replace(/^\./, '').toLowerCase())
         .filter((ext) => ext.length > 0),
     /** How long a fetched DSL list is reused before re-asking ITLingoCloud. */
-    dslCacheTtlMs: parseInt(process.env.DSL_CACHE_TTL_MS ?? '60000', 10),
+    dslCacheTtlMs: positiveInteger(process.env.DSL_CACHE_TTL_MS, 60000),
+    /**
+     * Maximum wall-clock time for loading an author module and constructing
+     * its Langium services before this session falls back to defaults.
+     */
+    dslServicesBuildTimeoutMs: positiveInteger(process.env.DSL_SERVICES_BUILD_TIMEOUT_MS, 10000),
 };
