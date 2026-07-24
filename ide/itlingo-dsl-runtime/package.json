@@ -23,6 +23,7 @@
     "prepare": "yarn run clean && yarn run build",
     "clean": "rimraf lib",
     "build": "tsc",
+    "test": "yarn run build && node test/dsl-lsp-client.test.js",
     "watch": "tsc -w"
   },
   "theiaExtensions": [

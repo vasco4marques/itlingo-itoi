@@ -209,6 +209,138 @@ assert.equal(
     'the repair also applies when an author services module is loaded',
 );
 
+const importedEntityGrammar = `
+grammar ImportedEntity
+
+entry Model:
+    packages+=Package*;
+
+Package:
+    'package' name=ID imports+=Import* entities+=Entity* uses+=Use*;
+
+Import:
+    'import' namespace=QualifiedName;
+
+Entity:
+    'entity' name=ID '{' attributes+=Attribute* '}';
+
+Attribute:
+    'attribute' name=ID;
+
+Use:
+    'use' target=[Attribute:QualifiedName];
+
+QualifiedName returns string:
+    ID ('.' ID)*;
+
+terminal ID: /[a-zA-Z_][a-zA-Z0-9_]*/;
+hidden terminal WS: /\\s+/;
+`;
+
+const importScopeModule = `
+import {
+    AstUtils, DefaultNameProvider, DefaultScopeComputation,
+    DefaultScopeProvider, EMPTY_SCOPE, isNamed, stream, StreamScope,
+} from 'langium';
+
+const { getContainerOfType, getDocument, streamAllContents } = AstUtils;
+
+class Names extends DefaultNameProvider {
+    getQualifiedName(node) {
+        if (!node.$container) return '';
+        const parent = this.getQualifiedName(node.$container);
+        const name = this.getName(node);
+        return name ? (parent ? parent + '.' + name : name) : parent;
+    }
+}
+
+class Exports extends DefaultScopeComputation {
+    async collectExportedSymbols(document) {
+        const descriptions = [];
+        for (const node of streamAllContents(document.parseResult.value)) {
+            if (!isNamed(node)) continue;
+            const name = this.nameProvider.getQualifiedName(node);
+            if (name) descriptions.push(this.descriptions.createDescription(node, name, document));
+        }
+        return descriptions;
+    }
+}
+
+class Scopes extends DefaultScopeProvider {
+    getGlobalScope(type, context) {
+        const pkg = getContainerOfType(context.container, node => node.$type === 'Package');
+        if (!pkg) return EMPTY_SCOPE;
+        const currentUri = getDocument(context.container).uri.toString();
+        const descriptions = this.indexManager.allElements(type)
+            .filter(description => {
+                if (description.documentUri.toString() === currentUri) return true;
+                return pkg.imports.some(imp => description.name.startsWith(imp.namespace + '.'));
+            })
+            .map(description => {
+                const ownPackage = getContainerOfType(description.node, node => node.$type === 'Package');
+                const name = ownPackage && description.documentUri.toString() === currentUri
+                    ? description.name.slice(ownPackage.name.length + 1)
+                    : description.name.replace(/^[^.]+\\./, '');
+                return { ...description, name };
+            });
+        return new StreamScope(stream(descriptions));
+    }
+}
+
+export default () => ({ references: {
+    NameProvider: () => new Names(),
+    ScopeComputation: services => new Exports(services),
+    ScopeProvider: services => new Scopes(services),
+}});
+`;
+
+async function diagnosticsForDocuments(services, sources, suffix) {
+    const documents = sources.map(([name, text]) =>
+        services.shared.workspace.LangiumDocumentFactory.fromString(
+            text,
+            URI.parse(`memory:///imports-${suffix}-${name}${services.LanguageMetaData.fileExtensions[0]}`),
+        ),
+    );
+    await services.shared.workspace.DocumentBuilder.build(documents, { validation: true });
+    return documents.map(document => document.diagnostics ?? []);
+}
+
+const importedEntityServices = await createDslServices({
+    ...dsl(importScopeModule, 'import-scope-test-v1'),
+    grammar: importedEntityGrammar,
+    languageId: 'itlingo-imported-entity',
+    extensions: ['imported-entity'],
+});
+const [providerDiagnostics, consumerDiagnostics] = await diagnosticsForDocuments(
+    importedEntityServices,
+    [
+        ['provider', 'package provider entity Entity { attribute Attribute }'],
+        ['consumer', 'package consumer import provider use Entity.Attribute'],
+    ],
+    'matched',
+);
+assert.deepEqual(providerDiagnostics, [], 'the exporting document is valid');
+assert.deepEqual(
+    consumerDiagnostics,
+    [],
+    'an imported entity attribute resolves when both workspace documents are built together',
+);
+
+const [, foreignConsumerDiagnostics] = await diagnosticsForDocuments(
+    importedEntityServices,
+    [
+        ['foreign-provider', 'package provider entity Entity { attribute Attribute }'],
+        ['foreign-consumer', 'package consumer import unrelated use Entity.Attribute'],
+    ],
+    'unmatched',
+);
+assert.ok(
+    foreignConsumerDiagnostics.some(diagnostic =>
+        diagnostic.message.includes("Could not resolve reference to Attribute named 'Entity.Attribute'"),
+    ),
+    'a provisioned document whose package is not imported does not leak symbols into the scope',
+);
+
 const originalConsoleError = console.error;
 const loggedErrors = [];
 const surfacedErrors = [];
