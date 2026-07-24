@@ -2,8 +2,20 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { type Module } from 'langium';
-import { createServicesForGrammar } from 'langium/grammar';
+import {
+    type AstReflection,
+    EmptyFileSystem,
+    type Grammar,
+    type Module,
+    URI,
+} from 'langium';
+import {
+    collectAst,
+    collectTypeHierarchy,
+    createLangiumGrammarServices,
+    createServicesForGrammar,
+    mergeTypesAndInterfaces,
+} from 'langium/grammar';
 import { startLanguageServer } from 'langium/lsp';
 import type { LangiumServices, LangiumSharedServices } from 'langium/lsp';
 import {
@@ -21,6 +33,15 @@ const materializedModules = new Map<string, Promise<string>>();
 
 type DslServicesModule = Module<LangiumServices, unknown>;
 type ServicesLoadFailureHandler = (error: unknown) => void;
+type CachedAstReflection = AstReflection & {
+    subtypes: Record<string, Record<string, boolean | undefined>>;
+    allSubtypes: Record<string, string[] | undefined>;
+};
+
+type ParsedGrammar = {
+    grammarNode: Grammar;
+    grammarServices: ReturnType<typeof createLangiumGrammarServices>['grammar'];
+};
 
 async function withTimeout<T>(
     operation: Promise<T>,
@@ -98,11 +119,13 @@ async function loadServicesModule(dsl: ResolvedDsl): Promise<DslServicesModule> 
 
 function grammarConfig(
     dsl: ResolvedDsl,
+    parsedGrammar: ParsedGrammar,
     sharedModule?: Module<LangiumSharedServices, unknown>,
     module?: DslServicesModule,
 ) {
     return {
-        grammar: dsl.grammar,
+        grammar: parsedGrammar.grammarNode,
+        grammarServices: parsedGrammar.grammarServices,
         languageMetaData: {
             languageId: dsl.languageId,
             fileExtensions: dsl.extensions.map((ext) => `.${ext}`),
@@ -114,17 +137,75 @@ function grammarConfig(
     };
 }
 
+/**
+ * Langium 4.3.1's interpreted reflection only creates metadata for interfaces.
+ * A union nested inside another union therefore has no entry in `types`, causing
+ * subtype checks such as UIContainer -> UIElement -> FlowElement to stop early.
+ */
+function repairNestedUnionReflection(parsedGrammar: ParsedGrammar, reflection: AstReflection): void {
+    const hierarchy = collectTypeHierarchy(
+        mergeTypesAndInterfaces(collectAst(parsedGrammar.grammarNode, {
+            services: parsedGrammar.grammarServices,
+        })),
+    );
+    for (const name of hierarchy.superTypes.keys()) {
+        if (!reflection.types[name]) {
+            reflection.types[name] = {
+                name,
+                properties: {},
+                superTypes: [...hierarchy.superTypes.get(name)],
+            };
+        }
+    }
+
+    // AbstractAstReflection caches subtype results. Discarding both caches is
+    // required if the reflection has been consulted before this repair.
+    const cachedReflection = reflection as CachedAstReflection;
+    cachedReflection.subtypes = {};
+    cachedReflection.allSubtypes = {};
+}
+
+async function parseGrammar(grammar: string): Promise<ParsedGrammar> {
+    const grammarServices = createLangiumGrammarServices(EmptyFileSystem).grammar;
+    const document = grammarServices.shared.workspace.LangiumDocumentFactory.fromString(
+        grammar,
+        URI.parse('memory:/grammar.langium'),
+    );
+    await grammarServices.shared.workspace.DocumentBuilder.build(
+        [document],
+        { validation: false },
+    );
+    return {
+        grammarNode: document.parseResult.value as Grammar,
+        grammarServices,
+    };
+}
+
+async function createServices(
+    dsl: ResolvedDsl,
+    parsedGrammar: ParsedGrammar,
+    sharedModule?: Module<LangiumSharedServices, unknown>,
+    module?: DslServicesModule,
+): Promise<LangiumServices> {
+    const services = await createServicesForGrammar(
+        grammarConfig(dsl, parsedGrammar, sharedModule, module),
+    );
+    repairNestedUnionReflection(parsedGrammar, services.shared.AstReflection);
+    return services;
+}
+
 /** Build a DSL's services, falling back to Langium defaults for a broken author module. */
 export async function createDslServices(
     dsl: ResolvedDsl,
     sharedModule?: Module<LangiumSharedServices, unknown>,
     onServicesLoadFailure?: ServicesLoadFailureHandler,
 ): Promise<LangiumServices> {
+    const parsedGrammar = await parseGrammar(dsl.grammar);
     if (dsl.services) {
         try {
             return await withTimeout((async () => {
                 const module = await loadServicesModule(dsl);
-                return createServicesForGrammar(grammarConfig(dsl, sharedModule, module));
+                return createServices(dsl, parsedGrammar, sharedModule, module);
             })(), config.dslServicesBuildTimeoutMs, 'Custom services build');
         } catch (error) {
             console.error(
@@ -142,7 +223,7 @@ export async function createDslServices(
             }
         }
     }
-    return createServicesForGrammar(grammarConfig(dsl, sharedModule));
+    return createServices(dsl, parsedGrammar, sharedModule);
 }
 
 /**

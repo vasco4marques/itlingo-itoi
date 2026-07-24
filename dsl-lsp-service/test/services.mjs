@@ -105,7 +105,9 @@ export default function createModule() {
 async function diagnosticsFor(services, source, suffix) {
     const document = services.shared.workspace.LangiumDocumentFactory.fromString(
         source,
-        URI.parse(`memory:///qualified-${suffix}.example-draft`),
+        URI.parse(
+            `memory:///qualified-${suffix}${services.LanguageMetaData.fileExtensions[0]}`,
+        ),
     );
     await services.shared.workspace.DocumentBuilder.build(
         [document],
@@ -147,6 +149,64 @@ assert.ok(
         diagnostic.message.includes("Could not resolve reference to Attribute named 'e_VAT.Nope'"),
     ),
     'an unknown qualified attribute still produces a linking error',
+);
+
+const nestedUnionGrammar = `
+grammar NestedUnion
+
+entry Model:
+    elements+=(Target | Other | Direct | Use)*;
+
+Use:
+    'use' target=[Outer:ID];
+
+Target:
+    'target' name=ID;
+
+Other:
+    'other' name=ID;
+
+Direct:
+    'direct' name=ID;
+
+type Outer = Middle | Direct;
+type Middle = Target | Other;
+
+terminal ID: /[a-zA-Z_][a-zA-Z0-9_]*/;
+hidden terminal WS: /\\s+/;
+`;
+
+const nestedUnionServices = await createDslServices({
+    ...dsl(undefined, undefined),
+    grammar: nestedUnionGrammar,
+    languageId: 'itlingo-nested-union',
+    extensions: ['nested-union'],
+});
+assert.equal(
+    nestedUnionServices.shared.AstReflection.isSubtype('Target', 'Outer'),
+    true,
+    'a concrete type is a subtype of an outer nested union',
+);
+assert.deepEqual(
+    await diagnosticsFor(
+        nestedUnionServices,
+        'target targetOne use targetOne',
+        'nested-union',
+    ),
+    [],
+    'a reference typed at an outer nested union resolves',
+);
+
+const nestedUnionCustomServices = await createDslServices({
+    ...dsl(customModule, 'nested-union-custom-services-test-v1'),
+    grammar: nestedUnionGrammar,
+    languageId: 'itlingo-nested-union-custom',
+    extensions: ['nested-union-custom'],
+});
+assert.equal(
+    nestedUnionCustomServices.shared.AstReflection.isSubtype('Target', 'Outer'),
+    true,
+    'the repair also applies when an author services module is loaded',
 );
 
 const originalConsoleError = console.error;
