@@ -6,6 +6,8 @@
 //   2. initialize / initialized handshake succeeds.
 //   3. didOpen with a syntax error produces an error diagnostic.
 //   4. didChange with valid content clears the diagnostics.
+//   5. The retired cloud-source endpoint is absent and LSP sessions do not
+//      request a cloud corpus.
 //
 // Usage: node test/smoke.mjs
 
@@ -15,6 +17,7 @@ import { WebSocket } from 'ws';
 
 const MOCK_CLOUD_PORT = 18069;
 const SERVICE_PORT = 13001;
+let cloudSourceRequests = 0;
 
 const ACTIVE_GRAMMAR = `grammar Psl
 
@@ -186,21 +189,10 @@ const mockCloud = http.createServer((req, res) => {
         }));
         return;
     }
-    if (req.url === '/token_api/get-dsl-sources/1') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-            sources: [{
-                id: 101,
-                name: 'billing.psl',
-                content: 'Package p_Billing System Billing Entity e_VAT { attribute VATValue }',
-                digest: 'billing-source-v1',
-            }],
-        }));
-        return;
-    }
-    if (req.url === '/token_api/get-dsl-sources/2') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ sources: [] }));
+    if (req.url?.startsWith('/token_api/get-dsl-sources/')) {
+        cloudSourceRequests++;
+        res.writeHead(410, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'retired endpoint' }));
         return;
     }
     res.writeHead(404).end();
@@ -241,6 +233,14 @@ if (!activeDsl.extensions.includes('psl')) fail('active psl extension missing');
 if (!draftDsl.extensions.includes('psl-draft')) fail('draft psl-draft extension missing');
 if (!draftDsl.keywords.includes('element')) fail('keyword extraction missed "element"');
 console.log('OK  /dsls registration metadata');
+
+const retiredSourceEndpoint = await fetch(
+    `http://localhost:${SERVICE_PORT}/dsl-sources/${activeDsl.languageId}/101?iv=x&t=y`,
+);
+if (retiredSourceEndpoint.status !== 404) {
+    fail(`retired /dsl-sources endpoint returned HTTP ${retiredSourceEndpoint.status}`);
+}
+console.log('OK  retired /dsl-sources endpoint is absent');
 
 // --- 4. LSP session ----------------------------------------------------------
 const ws = new WebSocket(`ws://localhost:${SERVICE_PORT}/lsp/${draftDsl.languageId}?iv=x&t=y`);
@@ -356,7 +356,7 @@ if (diagnostics.diagnostics.length !== 0) {
 }
 console.log('OK  valid document cleared diagnostics');
 
-// --- 5. Cross-file import over the real LSP lifecycle -----------------------
+// --- 5. Active LSP sessions do not fetch a cloud corpus ---------------------
 const importWs = new WebSocket(
     `ws://localhost:${SERVICE_PORT}/lsp/${activeDsl.languageId}?iv=x&t=y`,
 );
@@ -365,16 +365,12 @@ await new Promise((resolve, reject) => {
     importWs.on('error', reject);
 });
 const importPending = new Map();
-const importDiagnostics = [];
 let importNextId = 100;
 importWs.on('message', data => {
     const message = JSON.parse(data.toString());
     if (message.id !== undefined && importPending.has(message.id)) {
         importPending.get(message.id)(message);
         importPending.delete(message.id);
-    } else if (message.method === 'textDocument/publishDiagnostics') {
-        const waiter = importDiagnostics.shift();
-        if (waiter) waiter(message.params);
     }
 });
 function importRequest(method, params) {
@@ -388,12 +384,6 @@ function importRequest(method, params) {
 function importNotify(method, params) {
     importWs.send(JSON.stringify({ jsonrpc: '2.0', method, params }));
 }
-function waitForImportDiagnostics() {
-    return new Promise((resolve, reject) => {
-        importDiagnostics.push(resolve);
-        setTimeout(() => reject(new Error('timeout waiting for import diagnostics')), 10000);
-    });
-}
 await importRequest('initialize', {
     processId: null,
     rootUri: null,
@@ -401,53 +391,11 @@ await importRequest('initialize', {
     capabilities: {},
 });
 importNotify('initialized', {});
-const importUri = 'file:///workspace/ordering.psl';
-let importDiagnosticsPromise = waitForImportDiagnostics();
-importNotify('textDocument/didOpen', {
-    textDocument: {
-        uri: importUri,
-        languageId: activeDsl.languageId,
-        version: 1,
-        text: 'Package p_Ordering Import p_Billing.* System Ordering derived e_VAT.VATValue',
-    },
-});
-let importResult = await importDiagnosticsPromise;
-if (importResult.diagnostics.length !== 0) {
-    fail(`expected imported reference to resolve, got: ${JSON.stringify(importResult.diagnostics)}`);
+await new Promise(resolve => setTimeout(resolve, 100));
+if (cloudSourceRequests !== 0) {
+    fail(`LSP session requested the retired cloud corpus ${cloudSourceRequests} time(s)`);
 }
-const definition = await importRequest('textDocument/definition', {
-    textDocument: { uri: importUri },
-    position: { line: 0, character: 73 },
-});
-if (!String(
-    definition.result?.uri
-    ?? definition.result?.targetUri
-    ?? definition.result?.[0]?.uri
-    ?? definition.result?.[0]?.targetUri,
-).includes('memory://itlingo-cloud/1/101')) {
-    fail(`definition did not target the imported source: ${JSON.stringify(definition.result)}`);
-}
-const definitionSource = await fetch(
-    `http://localhost:${SERVICE_PORT}/dsl-sources/${activeDsl.languageId}/101?iv=x&t=y`,
-);
-if (
-    !definitionSource.ok
-    || !(await definitionSource.text()).includes('attribute VATValue')
-) {
-    fail('imported definition source could not be materialized for Monaco');
-}
-importDiagnosticsPromise = waitForImportDiagnostics();
-importNotify('textDocument/didChange', {
-    textDocument: { uri: importUri, version: 2 },
-    contentChanges: [{
-        text: 'Package p_Ordering Import p_Billing.* System Ordering derived e_VAT.Nope',
-    }],
-});
-importResult = await importDiagnosticsPromise;
-if (!importResult.diagnostics.some(item => item.message.includes("named 'e_VAT.Nope'"))) {
-    fail(`expected imported typo diagnostic, got: ${JSON.stringify(importResult.diagnostics)}`);
-}
-console.log('OK  cross-file import resolves, defines, and rejects typos');
+console.log('OK  LSP session does not request a cloud corpus');
 
 ws.close();
 importWs.close();

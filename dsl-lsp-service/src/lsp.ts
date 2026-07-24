@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { URI, type LangiumDocument, type Module } from 'langium';
+import { type Module } from 'langium';
 import { createServicesForGrammar } from 'langium/grammar';
 import { startLanguageServer } from 'langium/lsp';
 import type { LangiumServices, LangiumSharedServices } from 'langium/lsp';
@@ -14,7 +14,6 @@ import {
 import type { MessageReader, MessageWriter } from 'vscode-languageserver/node';
 import { config } from './config.js';
 import type { ResolvedDsl } from './registry.js';
-import type { CloudDslSource } from './cloud.js';
 
 const appDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const runtimeModulesDirectory = resolve(appDirectory, '.runtime-modules');
@@ -156,7 +155,6 @@ export async function serveLspSession(
     reader: MessageReader,
     writer: MessageWriter,
     dsl: ResolvedDsl,
-    importedSources: CloudDslSource[] = [],
 ): Promise<void> {
     const connection = createConnection(reader, writer);
     let servicesLoadError: unknown;
@@ -181,44 +179,5 @@ export async function serveLspSession(
             });
         });
     }
-    await indexImportedSources(services, dsl, importedSources);
     startLanguageServer(services.shared);
-}
-
-/**
- * Add cloud-provisioned sibling specs to the real Langium build lifecycle.
- *
- * Building all documents together is important: Langium indexes every
- * document's exported symbols before it links any of them, so imports work in
- * either direction and cyclic imports do not depend on source ordering.
- */
-async function indexImportedSources(
-    services: LangiumServices,
-    dsl: ResolvedDsl,
-    sources: CloudDslSource[],
-): Promise<void> {
-    if (sources.length === 0) {
-        return;
-    }
-    const documents = services.shared.workspace.LangiumDocuments;
-    const factory = services.shared.workspace.LangiumDocumentFactory;
-    const extension = dsl.extensions[0] ?? dsl.acronym.toLowerCase();
-    const importedDocuments: LangiumDocument[] = [];
-    for (const source of sources) {
-        const uri = URI.parse(
-            `memory://itlingo-cloud/${dsl.id}/${source.id}.${extension}`,
-        );
-        if (documents.hasDocument(uri)) {
-            continue;
-        }
-        const document = factory.fromString(source.content, uri);
-        documents.addDocument(document);
-        importedDocuments.push(document);
-    }
-    if (importedDocuments.length > 0) {
-        await services.shared.workspace.DocumentBuilder.build(
-            importedDocuments,
-            { validation: false },
-        );
-    }
 }

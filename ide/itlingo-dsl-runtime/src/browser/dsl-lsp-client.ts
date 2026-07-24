@@ -432,61 +432,23 @@ export class DslLanguageClient {
                         return undefined;
                     }
                     const locations: any[] = Array.isArray(result) ? result : [result];
-                    return Promise.all(locations.map(async location => {
+                    return locations.map(location => {
                         const uri = monaco.Uri.parse(
                             location.uri ?? location.targetUri,
                         );
-                        await this.ensureImportedDefinitionModel(uri);
                         return {
                             uri,
                             range: this.toMonacoRange(
                                 location.range ?? location.targetSelectionRange,
                             ),
                         };
-                    }));
+                    });
                 } catch (error) {
                     log.warn('definition request failed', error);
                     return undefined;
                 }
             },
         });
-    }
-
-    private async ensureImportedDefinitionModel(
-        uri: monaco.Uri,
-    ): Promise<void> {
-        if (
-            uri.scheme !== 'memory'
-            || uri.authority !== 'itlingo-cloud'
-            || monaco.editor.getModel(uri)
-        ) {
-            return;
-        }
-        const pathSegments = uri.path.split('/').filter(Boolean);
-        const sourceFile = pathSegments[pathSegments.length - 1] ?? '';
-        const sourceId = sourceFile.split('.', 1)[0];
-        if (!/^\d+$/.test(sourceId)) {
-            return;
-        }
-        const socketUrl = new URL(this.webSocketUrl);
-        const protocol = socketUrl.protocol === 'wss:' ? 'https:' : 'http:';
-        const sourceUrl = new URL(
-            `${protocol}//${socketUrl.host}/dsl-sources/`
-            + `${encodeURIComponent(this.descriptor.languageId)}/`
-            + `${encodeURIComponent(sourceId)}`,
-        );
-        sourceUrl.search = socketUrl.search;
-        const response = await fetch(sourceUrl.toString());
-        if (!response.ok) {
-            throw new Error(
-                `could not load imported definition (HTTP ${response.status})`,
-            );
-        }
-        monaco.editor.createModel(
-            await response.text(),
-            this.descriptor.languageId,
-            uri,
-        );
     }
 
     private toHoverContents(contents: any): monaco.IMarkdownString[] {

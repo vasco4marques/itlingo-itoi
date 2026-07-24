@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { URI } from 'langium';
-import { createDslServices } from '../dist/lsp.js';
+import { createDslServices, serveLspSession } from '../dist/lsp.js';
+
+assert.equal(
+    serveLspSession.length,
+    3,
+    'serveLspSession accepts only the LSP reader, writer, and resolved DSL',
+);
 
 const grammar = `
 grammar Example

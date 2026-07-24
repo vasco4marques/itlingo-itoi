@@ -16,25 +16,12 @@ export interface CloudDsl {
     services_digest?: string;
 }
 
-/** One trusted specification from the token's workspace/organization scope. */
-export interface CloudDslSource {
-    id: number;
-    name: string;
-    content: string;
-    digest: string;
-    packages?: string[];
-}
-
 interface CacheEntry {
     expiresAt: number;
     dsls: CloudDsl[];
 }
 
 const cache = new Map<string, CacheEntry>();
-const sourceCache = new Map<string, {
-    expiresAt: number;
-    sources: CloudDslSource[];
-}>();
 
 /**
  * Fetch the DSL list from ITLingoCloud, authenticated with the ITOI launch
@@ -68,47 +55,4 @@ export async function fetchDsls(iv: string, t: string): Promise<CloudDsl[]> {
         }
     }
     return dsls;
-}
-
-export async function fetchDslSources(
-    dslId: number,
-    iv: string,
-    t: string,
-): Promise<CloudDslSource[]> {
-    const cacheKey = `${iv}:${t}:${dslId}`;
-    const cached = sourceCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-        return cached.sources;
-    }
-    const url = `${config.itlingoCloudUrl}token_api/get-dsl-sources/${dslId}`;
-    const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${iv}:${t}` },
-    });
-    if (!response.ok) {
-        throw new Error(
-            `ITLingoCloud get-dsl-sources failed: HTTP ${response.status}`,
-        );
-    }
-    const body = (await response.json()) as {
-        sources?: CloudDslSource[];
-        conflicting_packages?: string[];
-    };
-    const conflicts = new Set(
-        Array.isArray(body.conflicting_packages)
-            ? body.conflicting_packages
-            : [],
-    );
-    const sources = (Array.isArray(body.sources) ? body.sources : []).filter(
-        source => !(source.packages ?? []).some(pkg => conflicts.has(pkg)),
-    );
-    sourceCache.set(cacheKey, {
-        expiresAt: Date.now() + config.dslCacheTtlMs,
-        sources,
-    });
-    for (const [key, entry] of sourceCache) {
-        if (entry.expiresAt <= Date.now()) {
-            sourceCache.delete(key);
-        }
-    }
-    return sources;
 }
