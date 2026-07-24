@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { URI } from 'langium';
 import { createServicesForGrammar } from 'langium/grammar';
 import { startLanguageServer } from 'langium/lsp';
 import { createConnection, MessageType, ShowMessageNotification, } from 'vscode-languageserver/node';
@@ -113,7 +114,7 @@ export async function createDslServices(dsl, sharedModule, onServicesLoadFailure
  * instance because document state and the LSP connection are per client;
  * building services from a grammar string takes only a few milliseconds.
  */
-export async function serveLspSession(reader, writer, dsl) {
+export async function serveLspSession(reader, writer, dsl, importedSources = []) {
     const connection = createConnection(reader, writer);
     let servicesLoadError;
     const services = await createDslServices(dsl, {
@@ -137,5 +138,34 @@ export async function serveLspSession(reader, writer, dsl) {
             });
         });
     }
+    await indexImportedSources(services, dsl, importedSources);
     startLanguageServer(services.shared);
+}
+/**
+ * Add cloud-provisioned sibling specs to the real Langium build lifecycle.
+ *
+ * Building all documents together is important: Langium indexes every
+ * document's exported symbols before it links any of them, so imports work in
+ * either direction and cyclic imports do not depend on source ordering.
+ */
+async function indexImportedSources(services, dsl, sources) {
+    if (sources.length === 0) {
+        return;
+    }
+    const documents = services.shared.workspace.LangiumDocuments;
+    const factory = services.shared.workspace.LangiumDocumentFactory;
+    const extension = dsl.extensions[0] ?? dsl.acronym.toLowerCase();
+    const importedDocuments = [];
+    for (const source of sources) {
+        const uri = URI.parse(`memory://itlingo-cloud/${dsl.id}/${source.id}.${extension}`);
+        if (documents.hasDocument(uri)) {
+            continue;
+        }
+        const document = factory.fromString(source.content, uri);
+        documents.addDocument(document);
+        importedDocuments.push(document);
+    }
+    if (importedDocuments.length > 0) {
+        await services.shared.workspace.DocumentBuilder.build(importedDocuments, { validation: false });
+    }
 }

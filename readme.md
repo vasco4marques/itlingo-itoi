@@ -81,29 +81,20 @@ Sidecar environment:
 | `DSL_SERVICES_BUILD_TIMEOUT_MS` | `10000` | Maximum time allowed to load an author module and build its custom Langium services before falling back to defaults. |
 | `DSL_LSP_HOST_PORT` | `3002` (compose) | Host port the sidecar is published on; keep `DSL_LSP_PUBLIC_URL` in sync. |
 
-#### Sidecar containment
+#### Author-supplied services modules
 
-The production Compose service treats author-supplied services modules as
-untrusted code. The sidecar runs as UID/GID `10001`, with all Linux
-capabilities dropped, `no-new-privileges`, a read-only root filesystem, PID,
-CPU, and memory limits, and a 64 MiB tmpfs mounted at the exact module cache
-path `/app/.runtime-modules`. The cache tmpfs is required: without it module
-materialization fails and the editor visibly falls back to default Langium
-services.
+The sidecar loads and runs author-supplied services modules **in-process, with
+the same privileges as the sidecar itself** — there is no sandbox, egress
+proxy, or network isolation around them. Author code can reach the network,
+the host, and the current launch token that is present in the LSP process. This
+is a deliberate trade-off: only authors who understand the code they publish
+should be granted the ability to write DSL services modules, and operators who
+enable the feature accept that risk. Do not place secrets in the sidecar
+environment beyond what the feature needs.
 
-The sidecar is attached only to the `lsp-isolated` internal Docker network. A
-separate unprivileged nginx container exposes exactly
-`GET /token_api/get-dsls` to it and performs the Cloud request on the normal
-network. Author code therefore has no direct internet, host, or cloud-metadata
-route. The proxy intentionally forwards the per-request `Authorization`
-header; the current launch token is consequently still visible to code already
-executing inside that LSP process. Do not place any other secrets in the
-sidecar environment.
-
-Node timeouts cannot preempt JavaScript that blocks the event loop
-synchronously. The container resource limits and periodic restart/redeployment
-bound that residual case; the timeout handles imports and service construction
-that yield normally.
+`DSL_SERVICES_BUILD_TIMEOUT_MS` still bounds module loading and service
+construction that yield normally, falling back to default Langium services on
+timeout; it cannot preempt JavaScript that blocks the event loop synchronously.
 
 #### Reverse-proxy routing (production)
 

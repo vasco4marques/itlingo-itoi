@@ -6,6 +6,7 @@ import { toSocket, WebSocketMessageReader, WebSocketMessageWriter } from 'vscode
 import { config } from './config.js';
 import { getRegistry, toClientDescriptor } from './registry.js';
 import { serveLspSession } from './lsp.js';
+import { fetchDslSources, type CloudDslSource } from './cloud.js';
 
 const app = express();
 
@@ -36,6 +37,40 @@ app.get('/dsls', async (req: Request, res: Response) => {
         res.status(502).json({ error: String(error) });
     }
 });
+
+// Materialize a pre-indexed cloud source for Monaco go-to-definition. The
+// launch token and resolved DSL are checked again; this is not a generic file
+// endpoint.
+app.get(
+    '/dsl-sources/:languageId/:sourceId',
+    async (req: Request, res: Response) => {
+        const iv = String(req.query.iv ?? '');
+        const t = String(req.query.t ?? '');
+        const sourceId = Number.parseInt(req.params.sourceId, 10);
+        if (!iv || !t || !Number.isInteger(sourceId)) {
+            return res.status(401).json({ error: 'Invalid source request' });
+        }
+        try {
+            const registry = await getRegistry(iv, t);
+            const dsl = registry.find(entry =>
+                entry.languageId.toLowerCase()
+                === req.params.languageId.toLowerCase()
+            );
+            if (!dsl) {
+                return res.status(404).json({ error: 'Unknown language' });
+            }
+            const sources = await fetchDslSources(dsl.id, iv, t);
+            const source = sources.find(entry => entry.id === sourceId);
+            if (!source) {
+                return res.status(404).json({ error: 'Source not found' });
+            }
+            res.type('text/plain; charset=utf-8').send(source.content);
+        } catch (error) {
+            console.error('Failed to materialize imported DSL source:', error);
+            res.status(502).json({ error: String(error) });
+        }
+    },
+);
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
@@ -79,7 +114,19 @@ wss.on('connection', (webSocket: WebSocket, request: IncomingMessage) => {
             console.log(
                 `LSP session started: dsl=${dsl.acronym} ${dsl.version} (${dsl.status}) digest=${dsl.digest.slice(0, 12)}`,
             );
-            await serveLspSession(reader, writer, dsl);
+            let importedSources: CloudDslSource[] = [];
+            try {
+                importedSources = await fetchDslSources(dsl.id, iv, t);
+            } catch (error) {
+                // Keep the editor usable while cloud and sidecar deployments
+                // roll independently. Cross-file imports remain unavailable
+                // for this session and the failure is visible in service logs.
+                console.error(
+                    `Failed to provision imported sources for '${languageId}':`,
+                    error,
+                );
+            }
+            await serveLspSession(reader, writer, dsl, importedSources);
         } catch (error) {
             console.error(`Failed to start LSP session for '${languageId}':`, error);
             webSocket.close(1011, 'Failed to start language server');
@@ -91,5 +138,5 @@ server.listen(config.port, () => {
     console.log(`DSL LSP service listening on http://localhost:${config.port}`);
     console.log(`  ITLingoCloud URL:    ${config.itlingoCloudUrl}`);
     console.log(`  Reserved extensions: ${config.reservedExtensions.join(', ') || '(none)'}`);
-    console.log('  Endpoints: GET /health, GET /dsls?iv=..&t=.., WS /lsp/<languageId>?iv=..&t=..');
+    console.log('  Endpoints: GET /health, GET /dsls, GET /dsl-sources, WS /lsp/<languageId>');
 });

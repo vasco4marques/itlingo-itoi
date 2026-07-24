@@ -5,6 +5,7 @@ const grammar = 'grammar Example entry Model: name=ID; terminal ID: /[a-z]+/;';
 
 function dsl({ acronym = 'PSL', version, status, fileExtensions = ['psl'], services, servicesDigest }) {
     return {
+        id: 42,
         acronym,
         name: 'Project Specification Language',
         version,

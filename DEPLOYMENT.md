@@ -35,8 +35,8 @@ What it does:
 
 1. Builds `vasco4marques/itoi:<commit>` and `vasco4marques/itoi-lsp:<commit>`
    in parallel with `--no-cache`, and pushes both. Aborts if either fails.
-2. Uploads the repository's `docker-compose.yml` and the restricted LSP Cloud
-   proxy template so the runtime hardening cannot lag behind the images.
+2. Uploads the repository's `docker-compose.yml` so the runtime config cannot
+   lag behind the images.
 3. SSHes to the host and, in `$REMOTE_DIR`:
    - **Upserts** `API_IMAGE=…:<commit>` and `LSP_IMAGE=…:<commit>` into the
      remote `.env` so the tag is durable (see "Why the tag lives in .env").

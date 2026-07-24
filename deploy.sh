@@ -81,15 +81,10 @@ fi
 
 echo "Both images published. Deploying to $SSH_TARGET"
 
-echo "Uploading hardened Compose and LSP proxy configuration"
-ssh -i "$SSH_KEY" "$SSH_TARGET" \
-    "mkdir -p '$REMOTE_DIR/dsl-lsp-service'"
+echo "Uploading Compose configuration"
 scp -i "$SSH_KEY" \
     "$SCRIPT_DIR/docker-compose.yml" \
     "$SSH_TARGET:$REMOTE_DIR/docker-compose.yml"
-scp -i "$SSH_KEY" \
-    "$SCRIPT_DIR/dsl-lsp-service/cloud-proxy.conf.template" \
-    "$SSH_TARGET:$REMOTE_DIR/dsl-lsp-service/cloud-proxy.conf.template"
 
 ssh -i "$SSH_KEY" "$SSH_TARGET" bash -s -- \
     "$REMOTE_DIR" "$API_IMAGE" "$LSP_IMAGE" <<'REMOTE_SCRIPT'

@@ -1,0 +1,13 @@
+# Temporary override used while producing the ITLingoCloud/ITOI user guide:
+# points ITOI at the guide Odoo instance on host port 8099 instead of the
+# dev server on 8069. Apply with:
+#   docker compose -f docker-compose.yml -f docker-compose.guide-override.yml up -d
+# Restore the normal dev wiring with:
+#   docker compose up -d
+services:
+  api:
+    environment:
+      ITLINGO_CLOUD_URL: http://host.docker.internal:8099/
+  lsp:
+    environment:
+      ITLINGO_CLOUD_URL: http://host.docker.internal:8099/

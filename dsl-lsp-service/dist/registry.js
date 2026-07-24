@@ -56,6 +56,7 @@ export function resolveRegistry(dsls) {
         // decorated draft language id. Such DSL names are not currently used.
         const acronym = dsl.acronym.trim().toLowerCase();
         resolved.push({
+            id: dsl.id,
             acronym: dsl.acronym,
             name: dsl.name,
             version: dsl.version,

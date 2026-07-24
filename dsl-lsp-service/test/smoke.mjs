@@ -19,14 +19,115 @@ const SERVICE_PORT = 13001;
 const ACTIVE_GRAMMAR = `grammar Psl
 
 entry Model:
-    elements+=Element*;
+    packages+=PackageSystem*;
 
-Element:
-    'activeElement' name=ID;
+PackageSystem:
+    'Package' name=QualifiedName imports+=Import* system=System;
+
+Import:
+    'Import' importedNamespace=QualifiedNameWithWildcard;
+
+System:
+    'System' name=ID concepts+=(Entity | Derived)*;
+
+Entity:
+    'Entity' name=ID '{' attributes+=Attribute* '}';
+
+Attribute:
+    'attribute' name=ID;
+
+Derived:
+    'derived' from=[Attribute:QualifiedName];
+
+QualifiedName returns string:
+    ID ('.' ID)*;
+
+QualifiedNameWithWildcard returns string:
+    QualifiedName '.*'?;
 
 terminal ID: /[_a-zA-Z][\\w_]*/;
 hidden terminal WS: /\\s+/;
 hidden terminal SL_COMMENT: /\\/\\/[^\\n\\r]*/;
+`;
+
+const IMPORT_SCOPE_SERVICES = `
+import {
+    AstUtils, DefaultNameProvider, DefaultScopeComputation,
+    DefaultScopeProvider, EMPTY_SCOPE, interruptAndCheck, isNamed, stream,
+    StreamScope,
+} from 'langium';
+const { getContainerOfType, getDocument, streamAllContents } = AstUtils;
+class Names extends DefaultNameProvider {
+    getQualifiedName(node) {
+        if (!node.$container) return '';
+        const parent = this.getQualifiedName(node.$container);
+        const name = this.getName(node);
+        return name ? (parent ? parent + '.' + name : name) : parent;
+    }
+}
+class Exports extends DefaultScopeComputation {
+    async collectExportedSymbols(document, token) {
+        const out = [];
+        for (const node of streamAllContents(document.parseResult.value)) {
+            if (token) await interruptAndCheck(token);
+            if (!isNamed(node)) continue;
+            const name = this.nameProvider.getQualifiedName(node);
+            if (name) out.push(this.descriptions.createDescription(node, name, document));
+        }
+        return out;
+    }
+}
+function matches(imp, name) {
+    const left = String(imp.importedNamespace).split('.');
+    const right = name.split('.');
+    return left.every((part, index) => part === '*' || part === right[index]);
+}
+function normalized(imp, name) {
+    const parts = String(imp.importedNamespace).split('.');
+    if (parts.at(-1) === '*') parts.pop();
+    return name.replace(parts.join('.') + '.', '');
+}
+class Scopes extends DefaultScopeProvider {
+    getGlobalScope(type, context) {
+        const system = getContainerOfType(context.container, node => node.$type === 'System');
+        const pkg = getContainerOfType(context.container, node => node.$type === 'PackageSystem');
+        if (!pkg) return EMPTY_SCOPE;
+        const contextUri = getDocument(context.container).uri.toString();
+        const prefix = system ? this.nameProvider.getQualifiedName(system) : '';
+        const elements = this.indexManager.allElements(type).map(description => {
+            const imp = pkg.imports.find(item => matches(item, description.name));
+            let name = imp ? normalized(imp, description.name) : description.name;
+            const targetSystem = getContainerOfType(
+                description.node, node => node.$type === 'System'
+            );
+            if (imp && targetSystem) {
+                const systemName = normalized(
+                    imp, this.nameProvider.getQualifiedName(targetSystem)
+                );
+                if (systemName && name.startsWith(systemName + '.')) {
+                    name = name.slice(systemName.length + 1);
+                }
+            }
+            if (
+                !imp
+                && description.documentUri.toString() === contextUri
+                && prefix
+                && name.startsWith(prefix + '.')
+            ) {
+                name = name.slice(prefix.length + 1);
+            } else if (!imp) {
+                return undefined;
+            }
+            return { ...description, name };
+        }).filter(Boolean).toArray();
+        return elements.length ? new StreamScope(stream(elements)) : EMPTY_SCOPE;
+    }
+}
+export default () => ({ references: {
+    NameProvider: () => new Names(),
+    ScopeComputation: services => new Exports(services),
+    ScopeProvider: services => new Scopes(services),
+}});
 `;
 
 const DRAFT_GRAMMAR = `grammar Psl
@@ -58,6 +159,7 @@ const mockCloud = http.createServer((req, res) => {
         res.end(JSON.stringify({
             dsls: [
                 {
+                    id: 1,
                     acronym: 'PSL',
                     name: 'Project Specification Language',
                     version: '1.0',
@@ -65,8 +167,11 @@ const mockCloud = http.createServer((req, res) => {
                     file_extensions: ['psl'],
                     grammar: ACTIVE_GRAMMAR,
                     digest: 'testdigest0001',
+                    services: IMPORT_SCOPE_SERVICES,
+                    services_digest: 'import-scope-services-v1',
                 },
                 {
+                    id: 2,
                     acronym: 'PSL',
                     name: 'Project Specification Language',
                     version: '1.1',
@@ -79,6 +184,23 @@ const mockCloud = http.createServer((req, res) => {
                 },
             ],
         }));
+        return;
+    }
+    if (req.url === '/token_api/get-dsl-sources/1') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            sources: [{
+                id: 101,
+                name: 'billing.psl',
+                content: 'Package p_Billing System Billing Entity e_VAT { attribute VATValue }',
+                digest: 'billing-source-v1',
+            }],
+        }));
+        return;
+    }
+    if (req.url === '/token_api/get-dsl-sources/2') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ sources: [] }));
         return;
     }
     res.writeHead(404).end();
@@ -234,7 +356,101 @@ if (diagnostics.diagnostics.length !== 0) {
 }
 console.log('OK  valid document cleared diagnostics');
 
+// --- 5. Cross-file import over the real LSP lifecycle -----------------------
+const importWs = new WebSocket(
+    `ws://localhost:${SERVICE_PORT}/lsp/${activeDsl.languageId}?iv=x&t=y`,
+);
+await new Promise((resolve, reject) => {
+    importWs.on('open', resolve);
+    importWs.on('error', reject);
+});
+const importPending = new Map();
+const importDiagnostics = [];
+let importNextId = 100;
+importWs.on('message', data => {
+    const message = JSON.parse(data.toString());
+    if (message.id !== undefined && importPending.has(message.id)) {
+        importPending.get(message.id)(message);
+        importPending.delete(message.id);
+    } else if (message.method === 'textDocument/publishDiagnostics') {
+        const waiter = importDiagnostics.shift();
+        if (waiter) waiter(message.params);
+    }
+});
+function importRequest(method, params) {
+    const id = importNextId++;
+    importWs.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+    return new Promise((resolve, reject) => {
+        importPending.set(id, resolve);
+        setTimeout(() => reject(new Error(`timeout waiting for ${method}`)), 10000);
+    });
+}
+function importNotify(method, params) {
+    importWs.send(JSON.stringify({ jsonrpc: '2.0', method, params }));
+}
+function waitForImportDiagnostics() {
+    return new Promise((resolve, reject) => {
+        importDiagnostics.push(resolve);
+        setTimeout(() => reject(new Error('timeout waiting for import diagnostics')), 10000);
+    });
+}
+await importRequest('initialize', {
+    processId: null,
+    rootUri: null,
+    workspaceFolders: null,
+    capabilities: {},
+});
+importNotify('initialized', {});
+const importUri = 'file:///workspace/ordering.psl';
+let importDiagnosticsPromise = waitForImportDiagnostics();
+importNotify('textDocument/didOpen', {
+    textDocument: {
+        uri: importUri,
+        languageId: activeDsl.languageId,
+        version: 1,
+        text: 'Package p_Ordering Import p_Billing.* System Ordering derived e_VAT.VATValue',
+    },
+});
+let importResult = await importDiagnosticsPromise;
+if (importResult.diagnostics.length !== 0) {
+    fail(`expected imported reference to resolve, got: ${JSON.stringify(importResult.diagnostics)}`);
+}
+const definition = await importRequest('textDocument/definition', {
+    textDocument: { uri: importUri },
+    position: { line: 0, character: 73 },
+});
+if (!String(
+    definition.result?.uri
+    ?? definition.result?.targetUri
+    ?? definition.result?.[0]?.uri
+    ?? definition.result?.[0]?.targetUri,
+).includes('memory://itlingo-cloud/1/101')) {
+    fail(`definition did not target the imported source: ${JSON.stringify(definition.result)}`);
+}
+const definitionSource = await fetch(
+    `http://localhost:${SERVICE_PORT}/dsl-sources/${activeDsl.languageId}/101?iv=x&t=y`,
+);
+if (
+    !definitionSource.ok
+    || !(await definitionSource.text()).includes('attribute VATValue')
+) {
+    fail('imported definition source could not be materialized for Monaco');
+}
+importDiagnosticsPromise = waitForImportDiagnostics();
+importNotify('textDocument/didChange', {
+    textDocument: { uri: importUri, version: 2 },
+    contentChanges: [{
+        text: 'Package p_Ordering Import p_Billing.* System Ordering derived e_VAT.Nope',
+    }],
+});
+importResult = await importDiagnosticsPromise;
+if (!importResult.diagnostics.some(item => item.message.includes("named 'e_VAT.Nope'"))) {
+    fail(`expected imported typo diagnostic, got: ${JSON.stringify(importResult.diagnostics)}`);
+}
+console.log('OK  cross-file import resolves, defines, and rejects typos');
+
 ws.close();
+importWs.close();
 mockCloud.close();
 service.kill();
 console.log('SMOKE TEST PASSED');

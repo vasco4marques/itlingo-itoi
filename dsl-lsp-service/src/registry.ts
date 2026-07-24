@@ -4,6 +4,7 @@ import { extractKeywords } from './grammar-inspect.js';
 
 /** A DSL resolved to one servable grammar version. */
 export interface ResolvedDsl {
+    id: number;
     acronym: string;
     name: string;
     version: string;
@@ -80,6 +81,7 @@ export function resolveRegistry(dsls: CloudDsl[]): ResolvedDsl[] {
         // decorated draft language id. Such DSL names are not currently used.
         const acronym = dsl.acronym.trim().toLowerCase();
         resolved.push({
+            id: dsl.id,
             acronym: dsl.acronym,
             name: dsl.name,
             version: dsl.version,
