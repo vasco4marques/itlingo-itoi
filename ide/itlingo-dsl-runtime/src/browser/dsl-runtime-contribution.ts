@@ -1,7 +1,10 @@
-import { injectable } from '@theia/core/shared/inversify';
+import { inject, injectable } from '@theia/core/shared/inversify';
 import { FrontendApplicationContribution } from '@theia/core/lib/browser';
+import { FileService } from '@theia/filesystem/lib/browser/file-service';
+import { FileStat } from '@theia/filesystem/lib/common/files';
+import { WorkspaceService } from '@theia/workspace/lib/browser';
 import * as monaco from '@theia/monaco-editor-core';
-import { DslDescriptor, DslLanguageClient } from './dsl-lsp-client';
+import { DslDescriptor, DslLanguageClient, DslWorkspaceSpec, matchesDslExtension } from './dsl-lsp-client';
 
 const log = {
     info: (msg: string, ...rest: unknown[]) => console.info(`[dsl-runtime] ${msg}`, ...rest),
@@ -20,6 +23,12 @@ const log = {
 export class DslRuntimeFrontendContribution implements FrontendApplicationContribution {
 
     protected readonly clients: DslLanguageClient[] = [];
+
+    @inject(FileService)
+    protected readonly fileService: FileService;
+
+    @inject(WorkspaceService)
+    protected readonly workspaceService: WorkspaceService;
 
     onStart(): void {
         this.setup().catch(error => log.warn('dynamic DSL setup skipped', error));
@@ -103,10 +112,86 @@ export class DslRuntimeFrontendContribution implements FrontendApplicationContri
         });
         this.registerHighlighting(dsl);
 
-        const client = new DslLanguageClient({ ...dsl, extensions }, webSocketUrl);
+        const client = new DslLanguageClient(
+            { ...dsl, extensions },
+            webSocketUrl,
+            () => this.collectWorkspaceSpecs(extensions),
+        );
         this.clients.push(client);
         client.register();
         log.info(`registered DSL ${dsl.acronym} ${dsl.version} (${dsl.status}) for .${extensions.join(', .')}`);
+    }
+
+    /**
+     * Gather matching workspace files without loading dot-directories or an
+     * unbounded number of documents into a language server at startup.
+     */
+    protected async collectWorkspaceSpecs(extensions: readonly string[]): Promise<DslWorkspaceSpec[]> {
+        const specs: DslWorkspaceSpec[] = [];
+        const maxFiles = 200;
+        const maxFileSize = 1024 * 1024;
+        let capReached = false;
+
+        const visit = async (resource: FileStat['resource'], isWorkspaceRoot = false): Promise<void> => {
+            if (capReached) {
+                return;
+            }
+
+            let stat: FileStat;
+            try {
+                stat = await this.fileService.resolve(resource);
+            } catch (error) {
+                log.warn(`could not inspect workspace resource ${resource.toString()}`, error);
+                return;
+            }
+
+            if (stat.isDirectory) {
+                if (!isWorkspaceRoot && (stat.name.startsWith('.') || stat.name === 'node_modules')) {
+                    return;
+                }
+                for (const child of stat.children ?? []) {
+                    await visit(child.resource);
+                    if (capReached) {
+                        return;
+                    }
+                }
+                return;
+            }
+            if (!stat.isFile || !matchesDslExtension(stat.resource.path.toString(), extensions)) {
+                return;
+            }
+
+            try {
+                const file = await this.fileService.resolve(stat.resource, { resolveMetadata: true });
+                if (file.size > maxFileSize) {
+                    return;
+                }
+                const content = await this.fileService.read(file.resource, { acceptTextOnly: true });
+                specs.push({ uri: file.resource.toString(), text: content.value });
+                if (specs.length >= maxFiles) {
+                    capReached = true;
+                }
+            } catch (error) {
+                log.warn(`could not read workspace DSL spec ${stat.resource.toString()}`, error);
+            }
+        };
+
+        try {
+            for (const root of await this.workspaceService.roots) {
+                await visit(root.resource, true);
+                if (capReached) {
+                    break;
+                }
+            }
+        } catch (error) {
+            log.warn('could not scan workspace for DSL specs', error);
+            return [];
+        }
+
+        if (capReached) {
+            log.warn(`stopped preloading ${extensions.join(', ')} specs after ${maxFiles} files`);
+        }
+        return specs;
     }
 
     protected registerHighlighting(dsl: DslDescriptor): void {

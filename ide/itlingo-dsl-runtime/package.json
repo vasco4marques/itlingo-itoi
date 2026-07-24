@@ -11,7 +11,9 @@
   ],
   "dependencies": {
     "@theia/core": "latest",
-    "@theia/monaco": "latest"
+    "@theia/filesystem": "latest",
+    "@theia/monaco": "latest",
+    "@theia/workspace": "latest"
   },
   "devDependencies": {
     "rimraf": "latest",

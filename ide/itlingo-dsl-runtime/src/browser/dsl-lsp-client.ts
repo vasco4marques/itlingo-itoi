@@ -12,6 +12,20 @@ export interface DslDescriptor {
     keywords: string[];
 }
 
+/** A workspace document to register with the language server at startup. */
+export interface DslWorkspaceSpec {
+    uri: string;
+    text: string;
+}
+
+export type WorkspaceSpecCollector = () => Promise<readonly DslWorkspaceSpec[]>;
+
+/** Keep workspace discovery and Monaco model matching on the same extension rules. */
+export function matchesDslExtension(path: string, extensions: readonly string[]): boolean {
+    const normalizedPath = path.toLowerCase();
+    return extensions.some(extension => normalizedPath.endsWith(`.${extension.toLowerCase()}`));
+}
+
 interface LspPosition { line: number; character: number }
 interface LspRange { start: LspPosition; end: LspPosition }
 interface LspDiagnostic { range: LspRange; severity?: number; message: string; code?: string | number; source?: string }
@@ -35,12 +49,17 @@ export class DslLanguageClient {
     private nextRequestId = 1;
     private readonly pendingRequests = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
     private readonly documentVersions = new Map<string, number>();
+    /** Change subscriptions belong to Monaco models, not server documents. */
+    private readonly modelSubscriptions = new Map<string, monaco.IDisposable>();
+    /** Workspace documents remain open in the server when their editor model is disposed. */
+    private readonly workspaceUris = new Set<string>();
     private readonly markerOwner: string;
     private startPromise: Promise<void> | undefined;
 
     constructor(
         private readonly descriptor: DslDescriptor,
         private readonly webSocketUrl: string,
+        private readonly collectWorkspaceSpecs: WorkspaceSpecCollector = async () => [],
     ) {
         this.markerOwner = `dsl-runtime-${descriptor.languageId}`;
     }
@@ -55,8 +74,11 @@ export class DslLanguageClient {
     ensureStarted(): Promise<void> {
         if (!this.startPromise) {
             this.startPromise = this.connect()
-                .then(() => {
+                .then(async () => {
+                    await this.preloadWorkspaceSpecs();
                     // Backfill: models opened before the socket was ready.
+                    // Preloaded workspace documents are registered first so an
+                    // editor model for the same URI is not opened twice.
                     for (const model of monaco.editor.getModels()) {
                         this.adoptModel(model);
                     }
@@ -173,8 +195,45 @@ export class DslLanguageClient {
         if (model.getLanguageId() === this.descriptor.languageId) {
             return true;
         }
-        const path = model.uri.path.toLowerCase();
-        return this.descriptor.extensions.some(ext => path.endsWith(`.${ext}`));
+        return matchesDslExtension(model.uri.path, this.descriptor.extensions);
+    }
+
+    private async preloadWorkspaceSpecs(): Promise<void> {
+        let specs: readonly DslWorkspaceSpec[];
+        try {
+            specs = await this.collectWorkspaceSpecs();
+        } catch (error) {
+            log.warn(`could not collect workspace specs for ${this.descriptor.acronym}`, error);
+            return;
+        }
+
+        for (const spec of specs) {
+            let resource: monaco.Uri;
+            try {
+                resource = monaco.Uri.parse(spec.uri);
+            } catch (error) {
+                log.warn(`ignoring workspace spec with an invalid URI: ${spec.uri}`, error);
+                continue;
+            }
+            if (resource.scheme !== 'file' || !matchesDslExtension(resource.path, this.descriptor.extensions)) {
+                continue;
+            }
+
+            const uri = resource.toString();
+            this.workspaceUris.add(uri);
+            if (this.documentVersions.has(uri)) {
+                continue;
+            }
+            this.documentVersions.set(uri, 1);
+            this.sendNotification('textDocument/didOpen', {
+                textDocument: {
+                    uri,
+                    languageId: this.descriptor.languageId,
+                    version: 1,
+                    text: spec.text,
+                },
+            });
+        }
     }
 
     private watchModels(): void {
@@ -184,6 +243,13 @@ export class DslLanguageClient {
         monaco.editor.onDidCreateModel(model => this.considerModel(model));
         monaco.editor.onWillDisposeModel(model => {
             const uri = model.uri.toString();
+            this.modelSubscriptions.get(uri)?.dispose();
+            this.modelSubscriptions.delete(uri);
+            // A workspace preload is still needed to resolve references from
+            // other files after the corresponding editor tab is closed.
+            if (this.workspaceUris.has(uri)) {
+                return;
+            }
             if (this.documentVersions.delete(uri)) {
                 this.sendNotification('textDocument/didClose', { textDocument: { uri } });
             }
@@ -204,23 +270,35 @@ export class DslLanguageClient {
             return;
         }
         const uri = model.uri.toString();
-        if (this.documentVersions.has(uri)) {
+        if (this.modelSubscriptions.has(uri)) {
             return;
         }
         if (model.getLanguageId() !== this.descriptor.languageId) {
             // Models created before our language registration (restored tabs).
             monaco.editor.setModelLanguage(model, this.descriptor.languageId);
         }
-        this.documentVersions.set(uri, 1);
-        this.sendNotification('textDocument/didOpen', {
-            textDocument: {
-                uri,
-                languageId: this.descriptor.languageId,
-                version: 1,
-                text: model.getValue(),
-            },
-        });
-        model.onDidChangeContent(() => {
+        if (this.documentVersions.has(uri)) {
+            // The server already knows a preloaded document, or this is a
+            // reopened editor tab. In either case, resync the current model
+            // text without sending a duplicate didOpen.
+            const version = (this.documentVersions.get(uri) ?? 1) + 1;
+            this.documentVersions.set(uri, version);
+            this.sendNotification('textDocument/didChange', {
+                textDocument: { uri, version },
+                contentChanges: [{ text: model.getValue() }],
+            });
+        } else {
+            this.documentVersions.set(uri, 1);
+            this.sendNotification('textDocument/didOpen', {
+                textDocument: {
+                    uri,
+                    languageId: this.descriptor.languageId,
+                    version: 1,
+                    text: model.getValue(),
+                },
+            });
+        }
+        this.modelSubscriptions.set(uri, model.onDidChangeContent(() => {
             const version = (this.documentVersions.get(uri) ?? 1) + 1;
             this.documentVersions.set(uri, version);
             // A change event without range is a full-document sync, which
@@ -229,7 +307,7 @@ export class DslLanguageClient {
                 textDocument: { uri, version },
                 contentChanges: [{ text: model.getValue() }],
             });
-        });
+        }));
     }
 
     // ------------------------------------------------------------------
