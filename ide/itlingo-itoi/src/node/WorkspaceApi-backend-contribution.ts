@@ -9,7 +9,6 @@ import * as cp from 'child_process'
 import path = require("path");
 import * as uuid from 'uuid';
 import * as session from 'express-session';
-import connectPgSimple = require('connect-pg-simple');
 import { Pool, QueryResult }  from 'pg';
 import { createLogger, redactDbUrl } from './logger';
 const getDirName = require('path').dirname
@@ -43,6 +42,28 @@ type Editor = {
     time:number;
     workspaceid: number;
 };
+
+export async function redirectAfterWorkspaceReady(
+    req: express.Request,
+    res: express.Response,
+    params: string[],
+    setupWorkspace: (request: express.Request, workspaceParams: string[]) => Promise<void>,
+): Promise<void> {
+    try {
+        await setupWorkspace(req, params);
+        await new Promise<void>((resolve, reject) => {
+            req.session.save((err?: any) => err ? reject(err) : resolve());
+        });
+        res.statusCode = 301;
+        res.redirect('/');
+        res.end();
+    } catch (e: any) {
+        httpLog.error("createTempWorkspace launch failed", { workspace: params[0], err: e?.message });
+        res.statusCode = 500;
+        res.end();
+    }
+}
+
 
 declare module "express-session" {
     interface SessionData {
@@ -290,7 +311,7 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
 
         app.set('trust proxy', 1);
 
-        const PgSession = connectPgSimple(session);
+        const PgSession = require('connect-pg-simple')(session);
         const cookieSecure = process.env.ITOI_PROD === "DEV" ? false : true;
         app.use(session({
             store: new PgSession({
@@ -364,7 +385,7 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
             res.end();
         });
 
-        app.get('/createTempWorkspace', (req, res) => {
+        app.get('/createTempWorkspace', async (req, res) => {
             if(req.query.iv == undefined || req.query.t == undefined) {
                 httpLog.warn("createTempWorkspace missing iv/t, redirecting to itlingo cloud");
                 res.statusCode = 301;
@@ -393,11 +414,7 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
                     write: params[3],
                     wsid: params[4],
                 });
-                createWorkspace(req, params);
-                req.session.save();
-                res.statusCode = 301;
-                res.redirect('/');
-                res.end();
+                await redirectAfterWorkspaceReady(req, res, params, createWorkspace);
             }
         });
 
@@ -880,7 +897,7 @@ export class SwitchWSBackendContribution implements BackendApplicationContributi
             cloudLog.info("download-file written to disk", { workspaceid: editor.workspaceid, fileId, filenameToWrite: resolvedTarget, deduped: finalName !== safeName });
         }
 
-function createWorkspace(req:Express.Request, params:string[]){
+async function createWorkspace(req:Express.Request, params:string[]): Promise<void> {
     const workspace = params[0];
     const username = params[1];
     const write = params[3]=="true";
@@ -914,23 +931,23 @@ function createWorkspace(req:Express.Request, params:string[]){
         uuid: wuuid,
         foldername: randomFoldername,
     });
+    try {
+        await fs.promises.mkdir(randomFoldername, { recursive: true });
+    } catch (e: any) {
+        workspaceLog.error("mkdir for new workspace failed", { workspace, foldername: randomFoldername, err: e?.message });
+        throw e;
+    }
+    workspaceLog.debug("workspace folder created", { workspace, foldername: randomFoldername });
     req.session.workspace = {
         workspace,
         foldername: randomFoldername,
         write,
         time: Date.now(),
         workspaceid,
-     };
-     fs.mkdir(randomFoldername, {recursive: true},(err:any) => {
-         if (err) {
-             workspaceLog.error("mkdir for new workspace failed", { workspace, foldername: randomFoldername, err: err.message });
-             throw err;
-         }
-         workspaceLog.debug("workspace folder created", { workspace, foldername: randomFoldername });
-     });
+    };
     params.push(randomFoldername);
     workspaces.set(workspace, params);
-    pullFilesFromDb(randomFoldername,params);
+    pullFilesFromDb(randomFoldername, params);
 }
 
 function workspaceExists(workspace: string){

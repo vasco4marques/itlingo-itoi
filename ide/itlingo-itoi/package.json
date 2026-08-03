@@ -104,6 +104,7 @@
     "prepare": "yarn run clean && yarn run build",
     "clean": "rimraf lib",
     "build": "tsc",
+    "test": "yarn build && node test/launch-ordering.test.js",
     "watch": "tsc -w"
   },
   "theiaExtensions": [
