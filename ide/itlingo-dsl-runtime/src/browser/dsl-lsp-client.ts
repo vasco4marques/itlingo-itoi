@@ -1,4 +1,7 @@
 import * as monaco from '@theia/monaco-editor-core';
+import URI from '@theia/core/lib/common/uri';
+import { Diagnostic } from '@theia/core/shared/vscode-languageserver-protocol';
+import { ProblemManager } from '@theia/markers/lib/browser/problem/problem-manager';
 
 /** Registration metadata served by dsl-lsp-service GET /dsls. */
 export interface DslDescriptor {
@@ -28,7 +31,6 @@ export function matchesDslExtension(path: string, extensions: readonly string[])
 
 interface LspPosition { line: number; character: number }
 interface LspRange { start: LspPosition; end: LspPosition }
-interface LspDiagnostic { range: LspRange; severity?: number; message: string; code?: string | number; source?: string }
 
 const log = {
     info: (msg: string, ...rest: unknown[]) => console.info(`[dsl-runtime] ${msg}`, ...rest),
@@ -54,11 +56,13 @@ export class DslLanguageClient {
     /** Workspace documents remain open in the server when their editor model is disposed. */
     private readonly workspaceUris = new Set<string>();
     private readonly markerOwner: string;
+    private readonly publishedMarkerUris = new Set<string>();
     private startPromise: Promise<void> | undefined;
 
     constructor(
         private readonly descriptor: DslDescriptor,
         private readonly webSocketUrl: string,
+        private readonly problemManager: ProblemManager,
         private readonly collectWorkspaceSpecs: WorkspaceSpecCollector = async () => [],
     ) {
         this.markerOwner = `dsl-runtime-${descriptor.languageId}`;
@@ -314,35 +318,16 @@ export class DslLanguageClient {
     // Diagnostics
     // ------------------------------------------------------------------
 
-    private applyDiagnostics(params: { uri: string; diagnostics: LspDiagnostic[] }): void {
-        const model = monaco.editor.getModels()
-            .find(candidate => candidate.uri.toString() === params.uri);
-        if (!model) {
-            return;
-        }
-        const severityMap: Record<number, monaco.MarkerSeverity> = {
-            1: monaco.MarkerSeverity.Error,
-            2: monaco.MarkerSeverity.Warning,
-            3: monaco.MarkerSeverity.Info,
-            4: monaco.MarkerSeverity.Hint,
-        };
-        const markers: monaco.editor.IMarkerData[] = params.diagnostics.map(diagnostic => ({
-            severity: severityMap[diagnostic.severity ?? 1] ?? monaco.MarkerSeverity.Error,
-            message: diagnostic.message,
-            source: diagnostic.source ?? this.descriptor.acronym,
-            code: diagnostic.code !== undefined ? String(diagnostic.code) : undefined,
-            startLineNumber: diagnostic.range.start.line + 1,
-            startColumn: diagnostic.range.start.character + 1,
-            endLineNumber: diagnostic.range.end.line + 1,
-            endColumn: diagnostic.range.end.character + 1,
-        }));
-        monaco.editor.setModelMarkers(model, this.markerOwner, markers);
+    private applyDiagnostics(params: { uri: string; diagnostics: Diagnostic[] }): void {
+        this.publishedMarkerUris.add(params.uri);
+        this.problemManager.setMarkers(new URI(params.uri), this.markerOwner, params.diagnostics);
     }
 
     private clearAllMarkers(): void {
-        for (const model of monaco.editor.getModels()) {
-            monaco.editor.setModelMarkers(model, this.markerOwner, []);
+        for (const uri of this.publishedMarkerUris) {
+            this.problemManager.setMarkers(new URI(uri), this.markerOwner, []);
         }
+        this.publishedMarkerUris.clear();
     }
 
     // ------------------------------------------------------------------

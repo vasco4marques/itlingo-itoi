@@ -3,6 +3,7 @@ import { FrontendApplicationContribution } from '@theia/core/lib/browser';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { FileStat } from '@theia/filesystem/lib/common/files';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
+import { ProblemManager } from '@theia/markers/lib/browser/problem/problem-manager';
 import * as monaco from '@theia/monaco-editor-core';
 import { DslDescriptor, DslLanguageClient, DslWorkspaceSpec, matchesDslExtension } from './dsl-lsp-client';
 
@@ -29,6 +30,9 @@ export class DslRuntimeFrontendContribution implements FrontendApplicationContri
 
     @inject(WorkspaceService)
     protected readonly workspaceService: WorkspaceService;
+
+    @inject(ProblemManager)
+    protected readonly problemManager: ProblemManager;
 
     onStart(): void {
         this.setup().catch(error => log.warn('dynamic DSL setup skipped', error));
@@ -115,6 +119,7 @@ export class DslRuntimeFrontendContribution implements FrontendApplicationContri
         const client = new DslLanguageClient(
             { ...dsl, extensions },
             webSocketUrl,
+            this.problemManager,
             () => this.collectWorkspaceSpecs(extensions),
         );
         this.clients.push(client);

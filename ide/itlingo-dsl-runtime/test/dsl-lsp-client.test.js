@@ -29,16 +29,27 @@ const monaco = {
         setModelLanguage(model, languageId) {
             model.languageId = languageId;
         },
-        setModelMarkers() {},
     },
     languages: {},
-    MarkerSeverity: {},
 };
+
+class ProblemURI {
+    constructor(value) {
+        this.value = value;
+    }
+
+    toString() {
+        return this.value;
+    }
+}
 
 const originalLoad = Module._load;
 Module._load = function patchedLoad(request, parent, isMain) {
     if (request === '@theia/monaco-editor-core') {
         return monaco;
+    }
+    if (request === '@theia/core/lib/common/uri') {
+        return { default: ProblemURI };
     }
     return originalLoad.call(this, request, parent, isMain);
 };
@@ -65,6 +76,16 @@ function createModel(value) {
 
 async function main() {
     const sent = [];
+    const markerCalls = [];
+    const markerState = new Map();
+    const problemManager = {
+        setMarkers(resource, owner, diagnostics) {
+            const uriMarkers = markerState.get(resource.toString()) ?? new Map();
+            uriMarkers.set(owner, diagnostics);
+            markerState.set(resource.toString(), uriMarkers);
+            markerCalls.push({ resource, owner, diagnostics });
+        },
+    };
     global.WebSocket = { OPEN: 1 };
     const client = new DslLanguageClient(
         {
@@ -77,6 +98,7 @@ async function main() {
             keywords: [],
         },
         'ws://unused',
+        problemManager,
         async () => [{ uri: 'file:///workspace/provider.spec', text: 'entity Provider' }],
     );
     client.webSocket = {
@@ -92,6 +114,28 @@ async function main() {
         1,
         'workspace preload opens the provider exactly once',
     );
+    const diagnosticsUri = 'file:///workspace/no-model.spec';
+    const diagnostics = [{
+        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+        message: 'invalid declaration',
+        severity: 1,
+    }];
+    client.handleMessage(JSON.stringify({
+        method: 'textDocument/publishDiagnostics',
+        params: { uri: diagnosticsUri, diagnostics },
+    }));
+    assert.equal(markerCalls.length, 1, 'diagnostics are published without an open Monaco model');
+    assert.equal(markerCalls[0].resource.toString(), diagnosticsUri);
+    assert.equal(markerCalls[0].owner, 'dsl-runtime-itlingo-spec');
+    assert.deepEqual(markerCalls[0].diagnostics, diagnostics);
+
+    const otherMarkers = [{ message: 'other owner' }];
+    problemManager.setMarkers(new ProblemURI(diagnosticsUri), 'other-owner', otherMarkers);
+    client.clearAllMarkers();
+    const clearedMarkers = markerState.get(diagnosticsUri);
+    assert.deepEqual(clearedMarkers.get('dsl-runtime-itlingo-spec'), []);
+    assert.strictEqual(clearedMarkers.get('other-owner'), otherMarkers);
+
 
     const model = createModel('entity Provider');
     models.push(model);
